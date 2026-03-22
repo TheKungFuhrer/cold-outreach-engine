@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(cp:*)",
+      "Bash(node -c 2-enrichment/prefilter.js)",
+      "Bash(node -c 1-prospecting/pull_leads.js)",
+      "Bash(node -c 2-enrichment/export_clean.js)",
+      "Bash(node -c shared/env.js)",
+      "Bash(node -c shared/csv.js)",
+      "Bash(python -m py_compile 2-enrichment/classify_batch.py)",
+      "Bash(python -m py_compile 2-enrichment/escalate_sonnet.py)",
+      "Bash(python -m py_compile 2-enrichment/validate_phones.py)",
+      "Bash(python -m py_compile 2-enrichment/anymailfinder_contacts.py)",
+      "Bash(python -m py_compile 2-enrichment/anymailfinder_bulk.py)"
+    ]
+  }
+}

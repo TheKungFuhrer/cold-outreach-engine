@@ -1,0 +1,20 @@
+# Data (contains PII)
+data/
+
+# Environment
+.env
+
+# Dependencies
+node_modules/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
