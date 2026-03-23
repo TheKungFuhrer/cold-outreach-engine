@@ -108,8 +108,8 @@ def write_csvs(leads_with_phone, leads_no_phone, saved_results, fieldnames, outp
     buckets = {"mobile": [], "voip": [], "landline": [], "invalid": []}
     unprocessed = []
 
-    for lead in leads_with_phone:
-        lead_id = lead.get("id", lead.get("email"))
+    for i, lead in enumerate(leads_with_phone):
+        lead_id = lead.get("id", lead.get("email", str(i)))
         if lead_id in saved_results:
             r = saved_results[lead_id]
             lead_out = dict(lead)

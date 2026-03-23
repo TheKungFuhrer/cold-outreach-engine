@@ -124,8 +124,8 @@ const NAME_FIELDS = [
   "company_name", "company", "business_name", "first_name",
   "last_name", "name", "Company", "Company Name",
 ];
-const EMAIL_FIELDS = ["email", "Email", "email_address", "one_email"];
-const WEBSITE_FIELDS = ["website", "Website", "company_url", "url", "company_website"];
+const EMAIL_FIELDS = ["email", "Email", "email_address", "one_email", "decision_maker_email"];
+const WEBSITE_FIELDS = ["website", "Website", "company_url", "url", "company_website", "company_domain"];
 const CATEGORY_FIELDS = ["category", "lead_category", "Category"];
 
 // Social media URLs — flagged but still passed through

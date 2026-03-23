@@ -57,7 +57,7 @@ NOT a venue:
 def build_request(lead, index):
     name = lead.get("company_name") or lead.get("company") or lead.get("Company") or lead.get("name") or ""
     email = lead.get("email") or lead.get("Email") or ""
-    website = lead.get("website") or lead.get("Website") or lead.get("url") or ""
+    website = lead.get("website") or lead.get("Website") or lead.get("url") or lead.get("company_domain") or lead.get("company_website") or ""
 
     user_msg = f"Business name: {name}\nEmail: {email}"
     if website:

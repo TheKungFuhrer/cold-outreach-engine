@@ -11,16 +11,36 @@ const { projectPath } = require("../shared/utils");
 const { readCsv, writeCsv } = require("../shared/csv");
 const { timestamp } = require("../shared/utils");
 
-const DATA_CLASSIFIED = projectPath("data", "classified");
-const DATA_VERIFIED = projectPath("data", "verified");
 const DATA_FINAL = projectPath("data", "final");
 
-function main() {
-  const { records: haikuVenues } = readCsv(path.join(DATA_CLASSIFIED, "venues.csv"));
-  console.log(`Haiku-confirmed venues: ${haikuVenues.length}`);
+// All directories that may contain classified/verified venue CSVs
+const VENUE_SOURCES = [
+  { dir: projectPath("data", "classified"), label: "Haiku (original)" },
+  { dir: projectPath("data", "classified_geolead"), label: "Haiku (GeoLead)" },
+  { dir: projectPath("data", "verified"), label: "Sonnet (original)" },
+  { dir: projectPath("data", "verified_geolead"), label: "Sonnet (GeoLead)" },
+];
 
-  const { records: sonnetVenues } = readCsv(path.join(DATA_VERIFIED, "venues.csv"));
-  console.log(`Sonnet-confirmed venues: ${sonnetVenues.length}`);
+function safeReadCsv(filepath) {
+  try {
+    return readCsv(filepath);
+  } catch {
+    return { records: [], columns: [] };
+  }
+}
+
+function main() {
+  const allSources = [];
+  for (const { dir, label } of VENUE_SOURCES) {
+    const { records } = safeReadCsv(path.join(dir, "venues.csv"));
+    if (records.length > 0) {
+      console.log(`${label} venues: ${records.length}`);
+      allSources.push(...records);
+    }
+  }
+
+  const haikuVenues = allSources; // combined from all sources
+  const sonnetVenues = []; // already included above
 
   // Merge, deduplicating by email
   const seen = new Set();

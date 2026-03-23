@@ -65,7 +65,8 @@ function streamCsvFiles(filePaths, onRecord) {
  */
 function findField(row, candidates) {
   for (const f of candidates) {
-    if (row[f] !== undefined) return row[f] || "";
+    const val = row[f];
+    if (val !== undefined && val !== null && val !== "") return val;
   }
   return "";
 }
