@@ -10,7 +10,9 @@
     "escalate": "python 2-enrichment/escalate_sonnet.py",
     "phones": "python 2-enrichment/validate_phones.py",
     "export": "node 2-enrichment/export_clean.js",
-    "dedup": "node 1-prospecting/dedup/dedup_geolead.js"
+    "dedup": "node 1-prospecting/dedup/dedup_geolead.js",
+    "dashboards": "node scripts/update-dashboards.js",
+    "pipeline": "node pipeline.js"
   },
   "dependencies": {
     "csv-parse": "^5.5.0",

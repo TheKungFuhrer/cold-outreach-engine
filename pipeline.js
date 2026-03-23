@@ -100,6 +100,13 @@ const STEPS = [
     campaignFlag: "--campaign-id",
     description: "Assign verified leads to campaign",
   },
+  {
+    name: "dashboards",
+    cmd: "node",
+    script: "scripts/update-dashboards.js",
+    extraFlags: ["--skip-api"],
+    description: "Update HTML dashboards with latest data",
+  },
 ];
 
 function parseArgs() {
