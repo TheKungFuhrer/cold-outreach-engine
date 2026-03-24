@@ -15,10 +15,8 @@ const DATA_FINAL = projectPath("data", "final");
 
 // All directories that may contain classified/verified venue CSVs
 const VENUE_SOURCES = [
-  { dir: projectPath("data", "classified"), label: "Haiku (original)" },
-  { dir: projectPath("data", "classified_geolead"), label: "Haiku (GeoLead)" },
-  { dir: projectPath("data", "verified"), label: "Sonnet (original)" },
-  { dir: projectPath("data", "verified_geolead"), label: "Sonnet (GeoLead)" },
+  { dir: projectPath("data", "classified"), label: "Classified" },
+  { dir: projectPath("data", "verified"), label: "Sonnet verified" },
 ];
 
 function safeReadCsv(filepath) {

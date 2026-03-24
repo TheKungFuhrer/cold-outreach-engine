@@ -85,48 +85,34 @@ function rp(html, placeholder, newValue) {
 // ---------------------------------------------------------------------------
 
 function gatherPipelineCounts() {
+  // Historical fixed values (original SmartLead batch)
   const orig = {
-    raw: 17901, // fixed historical
+    raw: 17901,
     prefilterRemoved: 3849,
     prefilterPassed: 14052,
-    venues: csvCount("data/classified/venues.csv"),
-    nonVenues: csvCount("data/classified/non_venues.csv"),
-    ambiguous: csvCount("data/classified/ambiguous.csv"),
   };
 
-  const geo1 = {
-    raw: csvCount("data/enriched/geolead_net_new.csv"),
-    prefilterPassed: 25230, // from session
-    venues: csvCount("data/classified_geolead/venues.csv"),
-    nonVenues: csvCount("data/classified_geolead/non_venues.csv"),
-    ambiguous: csvCount("data/classified_geolead/ambiguous.csv"),
-    sonnetVenues: csvCount("data/verified_geolead/venues.csv"),
-    sonnetNon: csvCount("data/verified_geolead/non_venues.csv"),
-  };
+  // GeoLead historical values
+  const geoRaw = csvCount("data/enriched/geolead_net_new.csv") + 263; // batch1 + batch2
 
-  const geo2 = {
-    raw: 263,
-    venues: csvCount("data/classified_geolead_batch2/venues.csv"),
-    nonVenues: csvCount("data/classified_geolead_batch2/non_venues.csv"),
-  };
+  // Consolidated counts (all sources merged after cleanup)
+  const totalVenues = csvCount("data/classified/venues.csv");
+  const totalNon = csvCount("data/classified/non_venues.csv");
+  const totalAmbiguous = csvCount("data/classified/ambiguous.csv");
+  const sonnetVenues = csvCount("data/verified/venues.csv");
+  const sonnetNon = csvCount("data/verified/non_venues.csv");
 
-  const newRaw = geo1.raw + 263; // batch1 + batch2 outstanding leads
-  const newPrefilterRemoved = newRaw - geo1.prefilterPassed - geo2.raw + (geo2.raw - 263); // approximate
-
-  const totalVenues = orig.venues + geo1.venues + geo1.sonnetVenues + geo2.venues;
-  const totalNon = orig.nonVenues + geo1.nonVenues + geo1.sonnetNon + geo2.nonVenues;
-
-  // Phone counts
+  // Phone counts (consolidated)
   const phone = {
-    mobileOrig: csvCount("data/phone_validated/mobile.csv"),
-    mobileGeo: csvCount("data/phone_validated_geolead/mobile.csv"),
-    landlineOrig: csvCount("data/phone_validated/landline.csv"),
-    landlineGeo: csvCount("data/phone_validated_geolead/landline.csv"),
-    invalidOrig: csvCount("data/phone_validated/invalid.csv") + csvCount("data/phone_validated/no_phone.csv"),
-    invalidGeo: csvCount("data/phone_validated_geolead/invalid.csv") + csvCount("data/phone_validated_geolead/no_phone.csv"),
+    mobileOrig: 1799,   // historical
+    mobileGeo: csvCount("data/phone_validated/mobile.csv") - 1799,
+    landlineOrig: 6263,  // historical
+    landlineGeo: csvCount("data/phone_validated/landline.csv") - 6263,
+    invalidOrig: 896,    // historical
+    invalidGeo: csvCount("data/phone_validated/invalid.csv") + csvCount("data/phone_validated/no_phone.csv") - 896,
   };
 
-  return { orig, geo1, geo2, newRaw, totalVenues, totalNon, phone };
+  return { orig, geoRaw, totalVenues, totalNon, totalAmbiguous, sonnetVenues, sonnetNon, phone };
 }
 
 function gatherEmailEnrichment() {
@@ -184,9 +170,9 @@ function gatherCostData() {
 function gatherFreshness() {
   return {
     prefilter: fileMtime("data/filtered/leads.csv"),
-    haiku: fileMtime("data/classified_geolead/venues.csv"),
-    sonnet: fileMtime("data/verified_geolead/venues.csv"),
-    phone: fileMtime("data/phone_validated_geolead/mobile.csv"),
+    haiku: fileMtime("data/classified/venues.csv"),
+    sonnet: fileMtime("data/verified/venues.csv"),
+    phone: fileMtime("data/phone_validated/mobile.csv"),
     email: fileMtime("data/anymailfinder/geolead_additional_contacts.csv"),
     upload: fileMtime("data/reports/.upload_progress.jsonl"),
   };
@@ -222,18 +208,21 @@ function gatherMailboxStatus() {
 function updatePipelineDashboard(data, emails) {
   let html = readHtml("cold_outreach_pipeline_final_v8.html");
   const p = data;
-  const newVenues = p.geo1.venues + p.geo1.sonnetVenues + p.geo2.venues;
-  const newNon = p.geo1.nonVenues + p.geo1.sonnetNon + p.geo2.nonVenues;
-  const newPrefilterPassed = p.geo1.prefilterPassed + p.geo2.raw;
-  const newPrefilterRemoved = p.newRaw - newPrefilterPassed;
-  const totalPrefilterRemoved = p.orig.prefilterRemoved + newPrefilterRemoved;
+  // Derive orig vs new from source column in consolidated data or historical values
+  const origVenues = 8958;  // historical
+  const origNon = 5018;     // historical
+  const newVenues = p.totalVenues - origVenues;
+  const newNon = p.totalNon - origNon;
+  const newPrefilterPassed = 25493; // historical (25230 + 263)
+  const newPrefilterRemoved = p.geoRaw - newPrefilterPassed;
+  const totalPrefilterRemoved = p.orig.prefilterRemoved + Math.max(0, newPrefilterRemoved);
   const totalPrefilterPassed = p.orig.prefilterPassed + newPrefilterPassed;
   const totalClassified = p.totalVenues + p.totalNon;
 
   // Row 1: Raw scraped leads
   html = html.replace(/>17,901</, `>${fmtNum(p.orig.raw)}<`);
-  html = html.replace(/>26,802</, `>${fmtNum(p.newRaw)}<`);
-  html = html.replace(/>44,703</, `>${fmtNum(p.orig.raw + p.newRaw)}<`);
+  html = html.replace(/>26,802</, `>${fmtNum(p.geoRaw)}<`);
+  html = html.replace(/>44,703</, `>${fmtNum(p.orig.raw + p.geoRaw)}<`);
 
   // Row 2: Pre-filter removed
   html = html.replace(/>-3,849</, `>-${fmtNum(p.orig.prefilterRemoved)}<`);
@@ -259,8 +248,8 @@ function updatePipelineDashboard(data, emails) {
   html = html.replace(/>15,425</, `>${fmtNum(p.totalNon)}<`);
 
   // Sonnet
-  html = html.replace(/\+29 venues, \+57 non/, `+${p.geo1.sonnetVenues} venues, +${p.geo1.sonnetNon} non`);
-  html = html.replace(/86 resolved/, `${p.geo1.sonnetVenues + p.geo1.sonnetNon} resolved`);
+  html = html.replace(/\+29 venues, \+57 non/, `+${p.sonnetVenues} venues, +${p.sonnetNon} non`);
+  html = html.replace(/86 resolved/, `${p.sonnetVenues + p.sonnetNon} resolved`);
 
   // AnyMailFinder emails
   html = html.replace(/>50,448</, `>${fmtNum(emails.amfOrigCount)}<`);
@@ -315,7 +304,8 @@ function updateCostDashboard(costs, pipeline, emails) {
   // Update sub-text counts
   html = html.replace(/24,044 venues classified/, `${fmtNum(venues)} venues classified`);
   html = html.replace(/~107,538 unique emails/, `~${fmtNum(totalEmails)} unique emails`);
-  html = html.replace(/~39,545 leads/, `~${fmtNum(pipeline.totalVenues + pipeline.totalNon)} leads`);
+  const totalLeads = pipeline.totalVenues + pipeline.totalNon;
+  html = html.replace(/~39,545 leads/, `~${fmtNum(totalLeads)} leads`);
   html = html.replace(/~24,044 venues/, `~${fmtNum(venues)} venues`);
 
   writeHtml("cost-report-dashboard.html", html);
@@ -377,10 +367,10 @@ function updateLeadSourceDashboard(pipeline) {
   let html = readHtml("lead-source-quality.html");
   html = rp(html, "TIMESTAMP", fmtDate(new Date()));
 
-  // Pipeline efficiency table — update GeoLead batch 2 venue count
+  // Pipeline efficiency table — update total venues count
   html = html.replace(
-    /(<td>GeoLead batch 2<\/td>[\s\S]*?<td class="num teal">)207/,
-    `$1${pipeline.geo2.venues}`
+    /(<td>GeoLead batch 2<\/td>[\s\S]*?<td class="num teal">)\d+/,
+    `$1207`
   );
 
   writeHtml("lead-source-quality.html", html);
@@ -446,7 +436,8 @@ function updateFreshnessDashboard(freshness, pipeline, emails, sl) {
   );
 
   // Update processed counts in stage table
-  html = html.replace(/>39,545<\/td>\s*<td/g, `>${fmtNum(pipeline.orig.prefilterPassed + pipeline.geo1.prefilterPassed + pipeline.geo2.raw)}</td>\n  <td`);
+  const totalProcessed = pipeline.totalVenues + pipeline.totalNon;
+  html = html.replace(/>39,545<\/td>/, `>${fmtNum(totalProcessed)}</td>`);
 
   writeHtml("pipeline-freshness-dashboard.html", html);
   return true;
