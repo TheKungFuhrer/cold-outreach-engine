@@ -1,0 +1,84 @@
+{
+  "steps": [
+    {
+      "name": "prefilter",
+      "script": "node 2-enrichment/prefilter.js",
+      "inputStage": "raw",
+      "outputStage": "filtered",
+      "inputFlag": "--input",
+      "outputPath": "data/filtered/leads.csv",
+      "timeout": 300000
+    },
+    {
+      "name": "classify",
+      "script": "python 2-enrichment/classify_batch.py",
+      "inputStage": "filtered",
+      "outputStage": "classified",
+      "inputFlag": "--input",
+      "outputPath": "data/classified/venues.csv",
+      "async": true,
+      "timeout": 600000,
+      "sidecar": {
+        "name": "escalate",
+        "script": "python 2-enrichment/escalate_sonnet.py",
+        "inputSource": "data/classified/ambiguous.csv",
+        "outputStage": "classified",
+        "inputFlag": "--input",
+        "outputPath": "data/verified/venues.csv",
+        "timeout": 600000
+      }
+    },
+    {
+      "name": "validate_phones",
+      "script": "python 2-enrichment/validate_phones.py",
+      "inputStage": "classified",
+      "outputStage": "validated",
+      "inputFlag": "--input",
+      "outputPath": "data/phone_validated/mobile.csv",
+      "timeout": 7200000
+    },
+    {
+      "name": "export",
+      "script": "node 2-enrichment/export_clean.js",
+      "inputStage": "validated",
+      "outputStage": "exported",
+      "outputPath": "data/final/",
+      "timeout": 300000
+    },
+    {
+      "name": "upload",
+      "script": "node 3-outreach/upload_leads.js",
+      "inputStage": "exported",
+      "outputStage": "uploaded",
+      "inputFlag": "--input",
+      "outputPath": null,
+      "requiresCampaign": true,
+      "timeout": 1800000
+    },
+    {
+      "name": "verify",
+      "script": "node 3-outreach/verify_emails.js",
+      "inputStage": "uploaded",
+      "outputStage": "uploaded",
+      "requiresCampaign": true,
+      "timeout": 600000
+    },
+    {
+      "name": "assign",
+      "script": "node 3-outreach/assign_campaigns.js",
+      "inputStage": "uploaded",
+      "outputStage": "uploaded",
+      "requiresCampaign": true,
+      "timeout": 600000
+    },
+    {
+      "name": "dashboards",
+      "script": "node scripts/update-dashboards.js",
+      "inputStage": null,
+      "outputStage": null,
+      "timeout": 120000
+    }
+  ],
+  "campaignSteps": ["upload", "verify", "assign"],
+  "retries": { "default": 2, "delay": 5000 }
+}
