@@ -110,12 +110,12 @@ function saveMaster(map) {
   const flat = [];
   for (const [domain, emailMap] of map) {
     for (const [email, record] of emailMap) {
-      record.domain = domain;
-      record.email = email;
       const out = {};
       for (const col of MASTER_COLUMNS) {
         out[col] = record[col] || "";
       }
+      out.domain = domain;
+      out.email = email;
       flat.push(out);
     }
   }
@@ -139,10 +139,10 @@ function saveMaster(map) {
  */
 function queryByStage(map, stage) {
   const results = [];
-  for (const [, emailMap] of map) {
-    for (const [, record] of emailMap) {
+  for (const [domain, emailMap] of map) {
+    for (const [email, record] of emailMap) {
       if (record.pipeline_stage === stage) {
-        results.push(record);
+        results.push({ ...record, domain, email });
       }
     }
   }
