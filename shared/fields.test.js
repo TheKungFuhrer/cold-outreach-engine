@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseName } from "./fields.js";
+import { parseName, parseLocationFull } from "./fields.js";
 
 describe("parseName", () => {
   it("splits simple two-part name", () => {
@@ -48,5 +48,63 @@ describe("parseName", () => {
 
   it("handles null", () => {
     expect(parseName(null)).toEqual({ first: "", last: "" });
+  });
+});
+
+describe("parseLocationFull", () => {
+  it("parses City, ST", () => {
+    expect(parseLocationFull("Austin, TX")).toEqual({ city: "Austin", state: "TX", zip: "" });
+  });
+
+  it("parses City, ST ZIP", () => {
+    expect(parseLocationFull("Austin, TX 78701")).toEqual({ city: "Austin", state: "TX", zip: "78701" });
+  });
+
+  it("parses full state name", () => {
+    expect(parseLocationFull("New York, New York")).toEqual({ city: "New York", state: "NY", zip: "" });
+  });
+
+  it("parses City ST ZIP without comma", () => {
+    expect(parseLocationFull("Miami FL 33101")).toEqual({ city: "Miami", state: "FL", zip: "33101" });
+  });
+
+  it("handles ZIP+4 (keeps only 5 digits)", () => {
+    expect(parseLocationFull("Dallas, TX 75201-1234")).toEqual({ city: "Dallas", state: "TX", zip: "75201" });
+  });
+
+  it("strips trailing USA", () => {
+    expect(parseLocationFull("Seattle, WA 98101, USA")).toEqual({ city: "Seattle", state: "WA", zip: "98101" });
+  });
+
+  it("strips trailing United States", () => {
+    expect(parseLocationFull("Portland, OR, United States")).toEqual({ city: "Portland", state: "OR", zip: "" });
+  });
+
+  it("handles extra whitespace", () => {
+    expect(parseLocationFull("  Denver ,  CO  80202  ")).toEqual({ city: "Denver", state: "CO", zip: "80202" });
+  });
+
+  it("returns empty for null", () => {
+    expect(parseLocationFull(null)).toEqual({ city: "", state: "", zip: "" });
+  });
+
+  it("returns empty for empty string", () => {
+    expect(parseLocationFull("")).toEqual({ city: "", state: "", zip: "" });
+  });
+
+  it("returns city only when no state match", () => {
+    expect(parseLocationFull("Some Place")).toEqual({ city: "Some Place", state: "", zip: "" });
+  });
+
+  it("handles state code only", () => {
+    expect(parseLocationFull("CA")).toEqual({ city: "", state: "CA", zip: "" });
+  });
+
+  it("handles full state name California", () => {
+    expect(parseLocationFull("Los Angeles, California")).toEqual({ city: "Los Angeles", state: "CA", zip: "" });
+  });
+
+  it("handles District of Columbia", () => {
+    expect(parseLocationFull("Washington, District of Columbia")).toEqual({ city: "Washington", state: "DC", zip: "" });
   });
 });

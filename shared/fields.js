@@ -212,6 +212,96 @@ function parseLocation(loc) {
 }
 
 // ---------------------------------------------------------------------------
+// parseLocationFull — parses location string into { city, state, zip }
+// ---------------------------------------------------------------------------
+
+const STATE_NAMES = {
+  "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+  "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+  "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+  "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+  "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+  "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+  "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+  "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+  "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+  "wisconsin": "WI", "wyoming": "WY",
+  "district of columbia": "DC",
+  // Territories
+  "puerto rico": "PR", "guam": "GU", "virgin islands": "VI",
+  "american samoa": "AS", "northern mariana islands": "MP",
+};
+
+const STATE_ABBREVS = new Set(Object.values(STATE_NAMES));
+
+/**
+ * Parse a location string into { city, state, zip }.
+ * Handles full state names, abbreviations, ZIP codes (5-digit and ZIP+4),
+ * trailing country names (USA, United States), and extra whitespace.
+ * @param {string|null} loc - Location string to parse
+ * @returns {{ city: string, state: string, zip: string }}
+ */
+function parseLocationFull(loc) {
+  const empty = { city: "", state: "", zip: "" };
+  if (!loc || typeof loc !== "string") return empty;
+
+  // Strip trailing country names (case-insensitive)
+  let s = loc.trim().replace(/,?\s*(united states of america|united states|usa|us)\s*$/i, "").trim();
+  if (!s) return empty;
+
+  // Extract ZIP code from end (5 digits, optionally followed by -XXXX)
+  let zip = "";
+  const zipMatch = s.match(/\b(\d{5})(?:-\d{4})?\s*$/);
+  if (zipMatch) {
+    zip = zipMatch[1];
+    s = s.slice(0, zipMatch.index).trim().replace(/,\s*$/, "").trim();
+  }
+
+  // Helper: normalize a candidate state token and return abbreviation or ""
+  function resolveState(token) {
+    const upper = token.trim().toUpperCase();
+    if (STATE_ABBREVS.has(upper)) return upper;
+    const lower = token.trim().toLowerCase();
+    return STATE_NAMES[lower] || "";
+  }
+
+  // Try comma-separated pattern: "City, State" or "City, ST"
+  const commaIdx = s.lastIndexOf(",");
+  if (commaIdx !== -1) {
+    const afterComma = s.slice(commaIdx + 1).trim();
+    const beforeComma = s.slice(0, commaIdx).trim();
+    const stateAbbr = resolveState(afterComma);
+    if (stateAbbr) {
+      return { city: beforeComma, state: stateAbbr, zip };
+    }
+  }
+
+  // Try space-separated pattern: "City ST" or "City ST ZIP" (ZIP already stripped above)
+  // Look for a 2-letter state code as the last word
+  const spaceMatch = s.match(/^(.*?)\s+([A-Za-z]{2})\s*$/);
+  if (spaceMatch) {
+    const stateAbbr = resolveState(spaceMatch[2]);
+    if (stateAbbr) {
+      return { city: spaceMatch[1].trim(), state: stateAbbr, zip };
+    }
+  }
+
+  // Just a state code alone (2 letters)
+  if (/^[A-Za-z]{2}$/.test(s)) {
+    const stateAbbr = resolveState(s);
+    if (stateAbbr) {
+      return { city: "", state: stateAbbr, zip };
+    }
+  }
+
+  // Fallback: treat entire string as city
+  return { city: s, state: "", zip };
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -221,5 +311,6 @@ module.exports = {
   normalizeRow,
   parseName,
   parseLocation,
+  parseLocationFull,
   looksLikeCompany,
 };
