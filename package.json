@@ -13,6 +13,8 @@
     "dedup": "node 1-prospecting/dedup/dedup_geolead.js",
     "dashboards": "node scripts/update-dashboards.js",
     "pipeline": "node pipeline.js",
+    "master": "node scripts/build-master.js",
+    "master:ghl": "node scripts/build-master.js --export ghl",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"
   },
