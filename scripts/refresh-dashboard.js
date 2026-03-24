@@ -92,6 +92,133 @@ function buildFunnel(funnelReport, masterMap) {
   return { stages };
 }
 
+// --- Campaigns ---
+
+function buildCampaigns(statsReport) {
+  if (!statsReport || !statsReport.campaigns) return [];
+
+  return statsReport.campaigns.map(c => {
+    // SmartLead API returns string-typed count fields
+    const sent = Number(c.sent_count) || 0;
+    const opened = Number(c.open_count) || 0;
+    const replied = Number(c.reply_count) || 0;
+    const bounced = Number(c.bounce_count) || 0;
+
+    return {
+      name: c.name,
+      id: Number(c.id),
+      sent,
+      opened,
+      replied,
+      bounced,
+      openRate: sent > 0 ? +(opened / sent).toFixed(3) : 0,
+      replyRate: sent > 0 ? +(replied / sent).toFixed(3) : 0,
+      bounceRate: sent > 0 ? +(bounced / sent).toFixed(3) : 0,
+    };
+  });
+}
+
+// --- Score Distribution ---
+
+function buildScoreDistribution(scoredRows) {
+  const buckets = Array.from({ length: 10 }, (_, i) => ({
+    range: `${i * 10 + 1}-${(i + 1) * 10}`,
+    count: 0,
+  }));
+
+  const scores = scoredRows
+    .map(r => Number(r.score))
+    .filter(s => s > 0 && s <= 100);
+
+  for (const s of scores) {
+    const idx = Math.min(Math.floor((s - 1) / 10), 9);
+    buckets[idx].count++;
+  }
+
+  scores.sort((a, b) => a - b);
+  const mean = scores.length > 0 ? +(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : 0;
+  const median = scores.length > 0
+    ? scores.length % 2 === 0
+      ? +((scores[scores.length / 2 - 1] + scores[scores.length / 2]) / 2).toFixed(1)
+      : scores[Math.floor(scores.length / 2)]
+    : 0;
+
+  return { buckets, mean, median };
+}
+
+// --- Hot Leads ---
+
+/**
+ * @param {object} syncData - SmartLead sync JSON
+ * @param {object[]} scoredRows - Scored venues CSV rows
+ * @param {Map|null} masterMap - Master lead map
+ * @param {string|null} lastSyncAt - ISO timestamp of the PREVIOUS sync run.
+ *   When called from daily-sync.js, this comes from the sync report's generated_at.
+ *   When called standalone (refresh only), falls back to 24 hours ago.
+ */
+function buildHotLeads(syncData, scoredRows, masterMap, lastSyncAt) {
+  if (!syncData || !syncData.leads) return [];
+
+  // Build score lookup by email
+  const scoreByEmail = new Map();
+  const scoreByDomain = new Map();
+  for (const row of scoredRows) {
+    const email = (row.email || "").toLowerCase().trim();
+    const domain = (row.website || "").toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, "").replace(/\/.*/, "");
+    if (email) scoreByEmail.set(email, Number(row.score) || 0);
+    if (domain) scoreByDomain.set(domain, Number(row.score) || 0);
+  }
+
+  // Default to 24h ago if no lastSyncAt provided (standalone refresh)
+  const cutoff = lastSyncAt ? new Date(lastSyncAt) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const hot = [];
+  for (const [email, lead] of Object.entries(syncData.leads)) {
+    if (!lead.last_replied_at) continue;
+    const repliedAt = new Date(lead.last_replied_at);
+    if (repliedAt <= cutoff) continue;
+
+    // Look up company/phone from master
+    let company = "", phone = "";
+    if (masterMap) {
+      const domain = email.split("@")[1] || "";
+      const domainMap = masterMap.get(domain);
+      if (domainMap) {
+        const record = domainMap.get(email) || domainMap.values().next().value;
+        company = record?.company_name || record?.company || "";
+        phone = record?.phone || "";
+      }
+    }
+
+    const score = scoreByEmail.get(email) || scoreByDomain.get(email.split("@")[1] || "") || 0;
+
+    hot.push({
+      company,
+      phone,
+      email,
+      replyPreview: (lead.reply_text || "").slice(0, 120),
+      repliedAt: lead.last_replied_at,
+      score,
+    });
+  }
+
+  return hot.sort((a, b) => b.score - a.score);
+}
+
+// --- Dead Leads ---
+
+function buildDeadLeads(syncData) {
+  if (!syncData || !syncData.leads) return { bounced: 0, unsubscribed: 0, total: 0 };
+
+  let bounced = 0, unsubscribed = 0;
+  for (const lead of Object.values(syncData.leads)) {
+    if (lead.smartlead_status === "bounced") bounced++;
+    if (lead.smartlead_status === "unsubscribed") unsubscribed++;
+  }
+
+  return { bounced, unsubscribed, total: bounced + unsubscribed };
+}
+
 // Placeholder refresh — will be completed in Task 4
 async function refresh() {
   ensureDir(ARTIFACTS_DIR);
@@ -129,7 +256,7 @@ async function refresh() {
   return data;
 }
 
-module.exports = { refresh, latestFile, buildFunnel };
+module.exports = { refresh, latestFile, buildFunnel, buildCampaigns, buildScoreDistribution, buildHotLeads, buildDeadLeads };
 
 // CLI entry point
 if (require.main === module) {
