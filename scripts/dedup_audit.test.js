@@ -160,3 +160,37 @@ describe("performMerge", () => {
     expect(discarded).toHaveLength(0);
   });
 });
+
+describe("end-to-end with fixture CSV", () => {
+  const fixturePath = path.join(__dirname, "..", "test-fixtures", "dedup_test_input.csv");
+
+  it("detects expected clusters from fixture data", () => {
+    const records = loadAndNormalize(fixturePath);
+    expect(records).toHaveLength(5);
+
+    const uf = runLayers(records);
+    const output = buildClusterOutput(uf, records);
+
+    // Should have clusters (exact email match on john@grandballroom.com,
+    // phone match on 512-555-1234, cross-domain on "grand ballroom")
+    expect(output.summary.totalClusters).toBeGreaterThanOrEqual(1);
+    expect(output.summary.estimatedDuplicateRecords).toBeGreaterThanOrEqual(1);
+
+    // solo@unique.com should NOT be in any cluster
+    const allClusteredIds = output.clusters.flatMap(c => c.records.map(r => r._id));
+    expect(allClusteredIds).not.toContain(4); // solo@unique.com is _id:4
+  });
+
+  it("merge preserves solo record and consolidates duplicates", () => {
+    const records = loadAndNormalize(fixturePath);
+    const uf = runLayers(records);
+    const output = buildClusterOutput(uf, records);
+    const { merged, discarded } = performMerge(records, output.clusters);
+
+    // Solo record must survive
+    expect(merged.some(r => r._email === "solo@unique.com")).toBe(true);
+
+    // Total merged + discarded = original count
+    expect(merged.length + discarded.length).toBe(records.length);
+  });
+});
