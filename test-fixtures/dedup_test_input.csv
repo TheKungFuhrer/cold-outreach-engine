@@ -1,0 +1,6 @@
+email,first_name,last_name,company_name,phone,website,domain,city,state,source,pipeline_stage,score
+john@grandballroom.com,John,Smith,Grand Ballroom LLC,+1 (512) 555-1234,https://www.grandballroom.com,grandballroom.com,Austin,TX,smartlead,classified,85
+john@grandballroom.com,John,S,The Grand Ballroom,,grandballroom.com,grandballroom.com,Austin,TX,anymailfinder,enriched,
+jane@grandballroom.com,Jane,Doe,Grand Ballroom LLC,512-555-1234,grandballroom.com,grandballroom.com,Austin,TX,anymailfinder,enriched,
+info@thegrandballroom.com,,,Grand Ballroom,,thegrandballroom.com,thegrandballroom.com,Austin,TX,geolead,classified,42
+solo@unique.com,Solo,Person,Unique Venue,999-888-7777,unique.com,unique.com,Seattle,WA,smartlead,uploaded,90
