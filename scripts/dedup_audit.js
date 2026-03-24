@@ -205,8 +205,7 @@ function buildClusterOutput(uf, records) {
   const byReason = {};
   let estimatedDuplicateRecords = 0;
   for (const c of clusters) {
-    const band = c.confidence >= 95 ? "high" : c.confidence >= 80 ? "medium" : "low";
-    byConfidence[band] = (byConfidence[band] || 0) + 1;
+    byConfidence[c.confidence] = (byConfidence[c.confidence] || 0) + 1;
     for (const r of c.reasons) {
       byReason[r] = (byReason[r] || 0) + 1;
     }
@@ -282,18 +281,41 @@ function writeReports(clusterOutput, records, inputPath) {
   const reportsDir = projectPath("data", "reports");
   ensureDir(reportsDir);
 
-  // 1. duplicate_clusters.json
+  // 1. duplicate_clusters.json — slim records to avoid multi-MB output
   const clustersJson = path.join(reportsDir, "duplicate_clusters.json");
-  fs.writeFileSync(clustersJson, JSON.stringify(clusterOutput, null, 2));
+  const slimClusters = clusterOutput.clusters.map((c, i) => ({
+    clusterId: i + 1,
+    confidence: c.confidence,
+    reasons: c.reasons,
+    records: c.records.map(r => ({
+      _id: r._id,
+      email: r._email,
+      companyName: r._companyNorm,
+      domain: r._domain,
+      phone: r._phone,
+      source: r._source,
+      score: r._score,
+    })),
+  }));
+  const jsonData = {
+    generated: new Date().toISOString(),
+    input: inputPath,
+    totalRecords: records.length,
+    totalClusters: clusterOutput.summary.totalClusters,
+    clusters: slimClusters,
+    summary: clusterOutput.summary,
+  };
+  fs.writeFileSync(clustersJson, JSON.stringify(jsonData, null, 2));
   console.log(`  Wrote ${clustersJson}`);
 
   // 2. dedup_recommendations.csv
   const recRows = [];
-  for (const cluster of clusterOutput.clusters) {
+  for (let ci = 0; ci < clusterOutput.clusters.length; ci++) {
+    const cluster = clusterOutput.clusters[ci];
     for (const rec of cluster.records) {
       const action = rec._id === cluster.keepId ? "keep" : "discard";
       recRows.push({
-        cluster_id: cluster.clusterId ?? "",
+        cluster_id: ci + 1,
         confidence: cluster.confidence,
         action,
         email: rec._email || rec.email || "",
@@ -311,15 +333,16 @@ function writeReports(clusterOutput, records, inputPath) {
 
   // 3. smartlead_cleanup.csv
   const cleanupRows = [];
-  for (const cluster of clusterOutput.clusters) {
+  for (let ci = 0; ci < clusterOutput.clusters.length; ci++) {
+    const cluster = clusterOutput.clusters[ci];
     for (const rec of cluster.records) {
       if (rec._id === cluster.keepId) continue;
-      const inSmartlead = rec.in_smartlead === "true" ||
+      const inSmartlead = rec.in_smartlead === "yes" || rec.in_smartlead === "true" || rec.in_smartlead === true ||
         rec._pipelineStage === "uploaded" ||
         rec._pipelineStage === "in_campaign";
       if (!inSmartlead) continue;
       cleanupRows.push({
-        cluster_id: cluster.clusterId ?? "",
+        cluster_id: ci + 1,
         confidence: cluster.confidence,
         action: "discard",
         email: rec._email || rec.email || "",
