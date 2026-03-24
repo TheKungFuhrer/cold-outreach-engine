@@ -72,7 +72,8 @@ const rateLimiter = new RateLimiter();
  * @throws {Error} On non-retryable HTTP errors
  */
 async function apiRequest(method, path, body = null, retries = 3) {
-  const url = `${BASE_URL}${path}?api_key=${getApiKey()}`;
+  const separator = path.includes("?") ? "&" : "?";
+  const url = `${BASE_URL}${path}${separator}api_key=${getApiKey()}`;
   const options = {
     method,
     headers: { "Content-Type": "application/json" },
@@ -432,20 +433,22 @@ function getLeadCategories() {
 // ---------------------------------------------------------------------------
 
 /**
- * Get all leads for a campaign with per-lead engagement data.
- * Auto-paginates through all results.
+ * Get all leads for a campaign. Auto-paginates through all results.
+ * SmartLead response: { data: [{campaign_lead_map_id, lead_category_id, status, lead: {...}}], total_leads, offset, limit }
  * @param {number} campaignId
  * @param {number} [pageSize=100] - Records per page
- * @returns {Promise<Array<Object>>} All leads with engagement fields
+ * @param {number|null} [categoryId=null] - Filter by lead_category_id (1-9 = replied leads)
+ * @returns {Promise<Array<Object>>} All lead entries (each has .lead nested object)
  */
-async function getCampaignLeads(campaignId, pageSize = 100) {
+async function getCampaignLeads(campaignId, pageSize = 100, categoryId = null) {
   const allLeads = [];
   let offset = 0;
   while (true) {
-    const page = await apiRequest(
-      "GET",
-      `/campaigns/${campaignId}/leads?limit=${pageSize}&offset=${offset}`
-    );
+    let path = `/campaigns/${campaignId}/leads?limit=${pageSize}&offset=${offset}`;
+    if (categoryId !== null) {
+      path += `&lead_category_id=${categoryId}`;
+    }
+    const page = await apiRequest("GET", path);
     const leads = Array.isArray(page) ? page : page.data || [];
     allLeads.push(...leads);
     if (leads.length < pageSize) break;

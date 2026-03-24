@@ -14,6 +14,7 @@ const { projectPath, ensureDir, timestamp } = require("../shared/utils");
 const {
   listCampaigns,
   getCampaignLeads,
+  getCampaignStats,
   getLeadMessageHistory,
 } = require("../shared/smartlead");
 
@@ -180,53 +181,115 @@ async function main() {
   const checkpoint = loadJson(checkpointPath) || {};
   const lastSyncAt = checkpoint.last_sync_at || null;
 
-  // Pull lead-level data from each campaign
+  // Pull data from each campaign
   const engagementMap = new Map();
   const totals = { sent: 0, opened: 0, replied: 0, bounced: 0, unsubscribed: 0 };
 
-  for (const campaignId of campaignIds) {
-    console.log(`  Pulling leads for campaign ${campaignId}...`);
-    const leads = await getCampaignLeads(campaignId);
-    console.log(`    ${leads.length} leads`);
+  // SmartLead API schema:
+  // - GET /campaigns/{id}/analytics → aggregate counts (sent_count, open_count, reply_count, bounce_count)
+  // - GET /campaigns/{id}/leads → { data: [{campaign_lead_map_id, lead_category_id, status, lead: {id, email, is_unsubscribed, ...}}] }
+  //   Lead-level data does NOT include per-lead engagement counts.
+  //   lead_category_id (1-9) = leads that have replied (SmartLead sub-categories)
+  //   lead_category_id = null = leads that haven't replied
+  // - GET /campaigns/{id}/leads/{leadId}/message-history → { history: [{type, email_body, time, open_count}] }
 
-    for (const lead of leads) {
-      const email = (lead.email || "").toLowerCase();
+  for (const campaignId of campaignIds) {
+    // Get campaign analytics for aggregate totals
+    console.log(`  Campaign ${campaignId}:`);
+    let analytics;
+    try {
+      analytics = await getCampaignStats(campaignId);
+    } catch (err) {
+      console.warn(`    Warning: could not fetch analytics: ${err.message}`);
+      analytics = {};
+    }
+
+    const campaignSent = parseInt(analytics.unique_sent_count || "0", 10);
+    const campaignOpened = parseInt(analytics.unique_open_count || "0", 10);
+    const campaignBounced = parseInt(analytics.bounce_count || "0", 10);
+    const campaignUnsubscribed = parseInt(analytics.unsubscribed_count || "0", 10);
+    console.log(`    Analytics: ${campaignSent} sent, ${campaignOpened} opened, ${campaignBounced} bounced`);
+
+    totals.sent += campaignSent;
+    totals.opened += campaignOpened;
+    totals.bounced += campaignBounced;
+    totals.unsubscribed += campaignUnsubscribed;
+
+    // Pull only categorized leads (categories 1-9 = replied leads)
+    // This avoids pulling all 17K+ leads when only ~200 have replied
+    let repliedLeads = [];
+    for (let catId = 1; catId <= 9; catId++) {
+      try {
+        const catLeads = await getCampaignLeads(campaignId, 100, catId);
+        repliedLeads.push(...catLeads);
+      } catch (err) {
+        // Category may not exist, that's fine
+      }
+    }
+
+    const repliedCount = repliedLeads.length;
+    totals.replied += repliedCount;
+    console.log(`    Replied leads: ${repliedCount}`);
+
+    // For each replied lead, get message history for reply text
+    for (const entry of repliedLeads) {
+      const leadData = entry.lead || entry;
+      const email = (leadData.email || "").toLowerCase();
       if (!email) continue;
 
-      const status = deriveStatus(lead);
-      totals[status] = (totals[status] || 0) + 1;
-
       let replyText = "";
-      let lastRepliedAt = lead.last_replied_at || "";
+      let lastRepliedAt = "";
+      let lastSentAt = "";
 
-      // Fetch message history for new replies only
-      if (
-        lead.reply_count > 0 &&
-        (!lastSyncAt || !lastRepliedAt || lastRepliedAt > lastSyncAt)
-      ) {
-        try {
-          const messages = await getLeadMessageHistory(campaignId, lead.id);
-          const replies = Array.isArray(messages)
-            ? messages.filter((m) => m.type === "REPLY" || m.type === "reply")
-            : [];
-          if (replies.length > 0) {
-            replyText = replies[replies.length - 1].body || "";
-            lastRepliedAt = replies[replies.length - 1].time || lastRepliedAt;
-          }
-        } catch (err) {
-          console.warn(`    Warning: could not fetch messages for lead ${lead.id}: ${err.message}`);
+      try {
+        const hist = await getLeadMessageHistory(campaignId, leadData.id);
+        const messages = hist.history || hist || [];
+        const replies = messages.filter((m) => m.type === "REPLY");
+        const sentMsgs = messages.filter((m) => m.type === "SENT");
+
+        if (replies.length > 0) {
+          const lastReply = replies[replies.length - 1];
+          replyText = (lastReply.email_body || "").replace(/<[^>]+>/g, "").trim();
+          lastRepliedAt = lastReply.time || "";
         }
+        if (sentMsgs.length > 0) {
+          lastSentAt = sentMsgs[sentMsgs.length - 1].time || "";
+        }
+      } catch (err) {
+        console.warn(`    Warning: could not fetch messages for ${email}: ${err.message}`);
       }
 
       mergeLeadData(engagementMap, {
         email,
-        status,
-        last_email_sent_at: lead.last_email_sent_at || "",
-        last_opened_at: lead.last_opened_at || "",
+        status: "replied",
+        last_email_sent_at: lastSentAt,
+        last_opened_at: "",
         last_replied_at: lastRepliedAt,
         reply_text: replyText,
         campaign_id: campaignId,
       });
+    }
+
+    // Pull all leads to detect unsubscribed (only if campaign has unsubscribes)
+    if (campaignUnsubscribed > 0) {
+      console.log(`    Scanning for ${campaignUnsubscribed} unsubscribed leads...`);
+      const allLeads = await getCampaignLeads(campaignId);
+      for (const entry of allLeads) {
+        const leadData = entry.lead || entry;
+        if (leadData.is_unsubscribed) {
+          const email = (leadData.email || "").toLowerCase();
+          if (!email) continue;
+          mergeLeadData(engagementMap, {
+            email,
+            status: "unsubscribed",
+            last_email_sent_at: "",
+            last_opened_at: "",
+            last_replied_at: "",
+            reply_text: "",
+            campaign_id: campaignId,
+          });
+        }
+      }
     }
   }
 
