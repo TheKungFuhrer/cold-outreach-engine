@@ -30,19 +30,31 @@ Three components:
 
 ## Data Refresh (`scripts/refresh-dashboard.js`)
 
+### Prerequisites
+
+The master CSV must exist before refresh runs. Run `node 3-outreach/build_master_list.js` if it hasn't been generated yet. The refresh script will log a warning and skip master-dependent sections (freshness, sourceQuality) if the file is missing, rather than failing.
+
 ### Inputs
 
-| Source | File Pattern | Data |
-|--------|-------------|------|
-| Pipeline funnel | `data/reports/funnel_report_*.json` (latest) | Stage counts and conversion rates |
-| Campaign stats | `data/reports/campaign_stats_*.json` (latest) | SmartLead campaign performance |
-| Cost report | `data/reports/cost_report_*.json` (latest) | API spend breakdown |
-| Scored venues | `data/scored/scored_venues_*.csv` (latest) | Venue scores for histogram |
-| SmartLead sync | `data/lifecycle/smartlead_sync_*.json` (latest) | Replied/bounced/unsubscribed leads |
-| Master CSV | `data/master/leads_master.csv` | Stage counts, source breakdown, freshness |
-| Exclusion summary | `data/excluded/summary.json` | Prefilter rejection stats |
+| Source | File Pattern | Data | Notes |
+|--------|-------------|------|-------|
+| Pipeline funnel | `data/reports/funnel_report_*.json` (latest) | Stage counts | Source uses descriptive names like "GeoLead net-new", "Post pre-filter", etc. Refresh maps these to simplified stage names (raw, filtered, classified, validated, uploaded, in_campaign). Conversion rates are computed by refresh (not in source). |
+| Campaign stats | `data/reports/campaign_stats_*.json` (latest) | SmartLead campaign performance | Source fields are string-typed (`"sent_count": "0"`). Refresh parses to integers and computes rates (openRate = open_count / sent_count, etc.). |
+| Cost report | `data/reports/cost_report_*.json` (latest) | API spend breakdown | Source has top-level keys `haiku`, `sonnet`, `numverify`, `smartlead_verification` with `records` and `cost` subfields. Refresh reshapes to per-stage array with costPerLead computed as cost/records. |
+| Scored venues | `data/scored/scored_venues_*.csv` (latest) | Venue scores for histogram + score lookups | Used for histogram buckets AND joined with hot leads to attach scores. |
+| SmartLead sync | `data/lifecycle/smartlead_sync_*.json` (latest) | Replied/bounced/unsubscribed leads | Primary source for hot leads. Structure: `{ leads: { [email]: { smartlead_status, reply_text, last_replied_at, campaign_ids } } }`. Hot leads = entries where `last_replied_at` is after the previous sync timestamp. Score attached by joining on email/domain with scored venues CSV. |
+| Master CSV | `data/master/leads_master.csv` (via `shared/master.js` `loadMaster()`) | Stage counts, source breakdown, freshness | Fallback: `data/upload/master_enriched_emails.csv` if master CSV not yet generated. |
+| Exclusion summary | `data/excluded/summary.json` | Prefilter rejection stats | |
 
 "Latest" determined by glob sort on timestamp in filename.
+
+### Data Computation Notes
+
+**Hot leads join strategy:** Read hot leads from the sync JSON (`leads` object, filter by `last_replied_at` > previous sync timestamp). For each hot lead email, look up company/phone from the master CSV and score from the scored venues CSV (join on normalized domain). Fields: `company` from master `company_name`, `phone` from master `phone`, `replyPreview` from sync `reply_text` (first 120 chars), `repliedAt` from sync `last_replied_at`, `score` from scored venues (0 if not found).
+
+**Freshness computation:** For each adjacent stage pair (filtered→classified, classified→validated, etc.), `unprocessedCount` = count of leads in the earlier stage minus count in the later stage (derived from funnel counts). `oldestDays` = days since the earliest-dated file in the earlier stage's output directory was last modified. If master CSV is unavailable, freshness is computed from funnel report counts only.
+
+**Source quality computation:** Computed on the fly from master CSV + scored venues CSV. Group master records by `source` and `source_detail`, join with scores, compute avgScore (mean of scores in group) and conversionRate (count reaching `in_campaign` / total in group).
 
 ### Output
 
@@ -157,9 +169,11 @@ node scripts/dashboard-server.js
 # Persistent (survives terminal close)
 pm2 start scripts/dashboard-server.js --name outreach-dashboard
 
-# Or without pm2
+# Or without pm2 (create logs/ dir first: mkdir -p logs)
 nohup node scripts/dashboard-server.js > logs/dashboard.log 2>&1 &
 ```
+
+Note: `logs/` directory is gitignored. Create it manually on the VPS if using nohup.
 
 ## Dashboard HTML (`data/artifacts/dashboard.html`)
 
