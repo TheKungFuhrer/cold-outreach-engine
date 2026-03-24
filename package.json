@@ -10,6 +10,7 @@
     "escalate": "python 2-enrichment/escalate_sonnet.py",
     "phones": "python 2-enrichment/validate_phones.py",
     "export": "node 2-enrichment/export_clean.js",
+    "score": "node 2-enrichment/score_leads.js",
     "dedup": "node 1-prospecting/dedup/dedup_geolead.js",
     "dashboards": "node scripts/update-dashboards.js",
     "pipeline": "node pipeline.js"
