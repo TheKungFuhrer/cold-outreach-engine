@@ -211,7 +211,7 @@ Enhancements needed for `parseName()`:
 ```
 "John Smith"           → first=John, last=Smith
 "Dr. Jane Doe"         → first=Jane, last=Doe (strip prefix)
-"Mary Jane Watson"     → first=Mary Jane, last=Watson (last token = last name)
+"Mary Jane Watson"     → first=Mary, last=Jane Watson (first token = first name, rest = last)
 "Smith"                → first=Smith, last= (existing behavior, kept as-is)
 ""                     → first=, last=
 "John Smith Jr."       → first=John, last=Smith (strip suffix)
