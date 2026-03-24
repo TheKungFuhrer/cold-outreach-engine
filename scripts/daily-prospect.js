@@ -18,15 +18,19 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { execSync } = require("child_process");
-
 const { requireEnv } = require("../shared/env");
 const { readCsv, writeCsv } = require("../shared/csv");
 const { resolveField, normalizeRow, FIELDS } = require("../shared/fields");
 const { projectPath, ensureDir, timestamp } = require("../shared/utils");
 const { loadJson, saveJson } = require("../shared/progress");
 const { normalizeDomain } = require("../shared/dedup");
-const { uploadLeads, chunkArray } = require("../shared/smartlead");
+const {
+  uploadLeads,
+  chunkArray,
+  prospectSearch: slProspectSearch,
+  prospectFindEmails,
+  exportCampaignCsv,
+} = require("../shared/smartlead");
 
 // ---------------------------------------------------------------------------
 // Config & paths
@@ -183,7 +187,7 @@ function getRotation(state, config) {
   };
 }
 
-function prospectSearch(rotation, limit, opts) {
+function runProspectSearches(rotation, limit, opts) {
   const { region, terms } = rotation;
   const allLeads = [];
   const seenDomains = new Set();
@@ -201,32 +205,12 @@ function prospectSearch(rotation, limit, opts) {
         continue;
       }
 
-      try {
+      {
         log("SEARCH", `Searching: "${query}"`);
-        const output = execSync(
-          `smartlead prospect search --query "${query}"`,
-          { encoding: "utf-8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"] }
-        );
+        const results = slProspectSearch(query);
 
-        // Parse output — expect JSON array or JSON object with data field
-        let results = [];
-        const trimmed = output.trim();
-        if (!trimmed) {
+        if (results.length === 0) {
           log("SEARCH", `  0 results`);
-          continue;
-        }
-
-        try {
-          const jsonStart = trimmed.indexOf("[") !== -1 ? trimmed.indexOf("[") : trimmed.indexOf("{");
-          if (jsonStart === -1) {
-            log("SEARCH", `  No JSON in output, skipping`);
-            continue;
-          }
-          const parsed = JSON.parse(trimmed.slice(jsonStart));
-          results = Array.isArray(parsed) ? parsed : (parsed.data || parsed.results || []);
-        } catch {
-          // Try CSV-like output: split by lines
-          log("SEARCH", `  Could not parse JSON output, treating as text (${trimmed.length} chars)`);
           continue;
         }
 
@@ -251,8 +235,6 @@ function prospectSearch(rotation, limit, opts) {
         }
 
         log("SEARCH", `  ${results.length} results (${allLeads.length} unique total)`);
-      } catch (err) {
-        log("SEARCH", `  Error for "${query}": ${err.message.split("\n")[0]}`);
       }
     }
     if (limit !== null && allLeads.length >= limit) break;
@@ -286,34 +268,13 @@ async function discoverEmails(leads, opts) {
     const domain = extractDomain(lead.website);
     if (!domain) continue;
 
-    const tmpFile = path.join(os.tmpdir(), `prospect_daily_${Date.now()}.json`);
-    const payload = {
-      contacts: [{ firstName: lead.first_name || "", lastName: lead.last_name || "", companyDomain: domain }],
-    };
-
-    try {
-      fs.writeFileSync(tmpFile, JSON.stringify(payload));
-      const output = execSync(
-        `smartlead prospect find-emails --from-json "${tmpFile}"`,
-        { timeout: 30000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
-      );
-      try { fs.unlinkSync(tmpFile); } catch {}
-
-      const jsonStart = output.indexOf("{");
-      if (jsonStart !== -1) {
-        const parsed = JSON.parse(output.slice(jsonStart));
-        const data = parsed.data || [];
-        const emails = data
-          .filter((r) => r.email_id && r.status !== "Not Found")
-          .map((r) => r.email_id);
-        if (emails.length > 0) {
-          lead.email = emails[0]; // use first found email
-          discovered++;
-        }
-      }
-    } catch (err) {
-      try { fs.unlinkSync(tmpFile); } catch {}
-      // Silently continue — email discovery is best-effort
+    const result = prospectFindEmails(domain, {
+      firstName: lead.first_name || "",
+      lastName: lead.last_name || "",
+    });
+    if (result.emails.length > 0) {
+      lead.email = result.emails[0];
+      discovered++;
     }
 
     if (i < needsEmail.length - 1) {
@@ -351,10 +312,11 @@ async function dedupAgainstExisting(leads, config, opts) {
     const tmpFile = path.join(os.tmpdir(), `campaign_export_${campaignId}_${Date.now()}.csv`);
     try {
       log("DEDUP", `  Exporting campaign ${campaignId}...`);
-      execSync(
-        `smartlead campaigns export --id ${campaignId} --out "${tmpFile}"`,
-        { encoding: "utf-8", timeout: 120000, maxBuffer: 50 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }
-      );
+      const exportSuccess = exportCampaignCsv(campaignId, tmpFile);
+      if (!exportSuccess) {
+        log("DEDUP", `  Export failed for campaign ${campaignId}, skipping`);
+        continue;
+      }
 
       const { records } = await readCsv(tmpFile);
       for (const row of records) {
@@ -687,7 +649,7 @@ async function main() {
   log("SEARCH", `Rotation: ${rotation.cyclePosition}`);
 
   const limit = opts.limit !== null ? opts.limit : (config.daily_lead_target || config.daily_search_limit);
-  const rawLeads = prospectSearch(rotation, limit, opts);
+  const rawLeads = runProspectSearches(rotation, limit, opts);
 
   if (rawLeads.length > 0 && !opts.dryRun) {
     const rawCsvPath = path.join(STAGING_DIR, `${dateStr}_raw.csv`);

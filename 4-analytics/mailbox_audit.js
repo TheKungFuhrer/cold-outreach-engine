@@ -10,33 +10,16 @@
  * aggregates for reference.
  */
 
-const { apiRequest, listCampaigns } = require("../shared/smartlead");
+const {
+  listCampaigns,
+  getCampaignStats,
+  listEmailAccounts,
+  getEmailAccount,
+  getWarmupStats,
+  getCampaignEmailAccounts,
+} = require("../shared/smartlead");
 const { ensureDir, projectPath, timestamp } = require("../shared/utils");
 const fs = require("fs");
-
-// -------------------------------------------------------------------------
-// API helpers (endpoints not yet in shared/smartlead.js)
-// -------------------------------------------------------------------------
-
-async function listEmailAccounts() {
-  return apiRequest("GET", "/email-accounts");
-}
-
-async function getEmailAccount(id) {
-  return apiRequest("GET", `/email-accounts/${id}`);
-}
-
-async function getWarmupStats(emailAccountId) {
-  return apiRequest("GET", `/email-accounts/${emailAccountId}/warmup-stats`);
-}
-
-async function getCampaignEmailAccounts(campaignId) {
-  return apiRequest("GET", `/campaigns/${campaignId}/email-accounts`);
-}
-
-async function getCampaignAnalytics(campaignId) {
-  return apiRequest("GET", `/campaigns/${campaignId}/analytics`);
-}
 
 // -------------------------------------------------------------------------
 // Main
@@ -67,7 +50,7 @@ async function main() {
 
     try {
       const emailAccounts = await getCampaignEmailAccounts(cid);
-      const analytics = await getCampaignAnalytics(cid);
+      const analytics = await getCampaignStats(cid);
 
       campaignAnalyticsMap[cid] = {
         id: cid,

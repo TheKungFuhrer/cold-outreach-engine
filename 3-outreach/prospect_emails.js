@@ -12,7 +12,7 @@
  *   node 3-outreach/prospect_emails.js --dry-run
  */
 
-const { execSync } = require("child_process");
+const { prospectFindEmails } = require("../shared/smartlead");
 const { readCsv, writeCsv } = require("../shared/csv");
 const { resolveField } = require("../shared/fields");
 const { loadJsonl, appendJsonl } = require("../shared/progress");
@@ -41,40 +41,7 @@ function extractDomain(raw) {
 }
 
 function findEmailsForDomain(domain, companyName) {
-  const fs = require("fs");
-  const os = require("os");
-  const path = require("path");
-
-  // SmartLead CLI requires a JSON file: {"contacts": [{firstName, lastName, companyDomain}]}
-  const tmpFile = path.join(os.tmpdir(), `prospect_${Date.now()}.json`);
-  const payload = {
-    contacts: [{ firstName: "", lastName: "", companyDomain: domain }],
-  };
-
-  try {
-    fs.writeFileSync(tmpFile, JSON.stringify(payload));
-    const output = execSync(
-      `smartlead prospect find-emails --from-json "${tmpFile}"`,
-      { timeout: 30000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
-    );
-    fs.unlinkSync(tmpFile);
-
-    // Extract JSON from output (may have warnings before the JSON)
-    const jsonStart = output.indexOf("{");
-    if (jsonStart === -1) {
-      return { emails: [], raw: output.trim(), error: "No JSON in output" };
-    }
-    const parsed = JSON.parse(output.slice(jsonStart));
-    const data = parsed.data || [];
-    const emails = data
-      .filter((r) => r.email_id && r.status !== "Not Found")
-      .map((r) => r.email_id);
-    const statuses = data.map((r) => r.status);
-    return { emails, statuses, raw: parsed, error: null };
-  } catch (err) {
-    try { fs.unlinkSync(tmpFile); } catch {}
-    return { emails: [], raw: null, error: err.message.split("\n")[0] };
-  }
+  return prospectFindEmails(domain, { firstName: "", lastName: "" });
 }
 
 function sleep(ms) {

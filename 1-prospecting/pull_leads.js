@@ -6,24 +6,17 @@
  * Usage: node 1-prospecting/pull_leads.js [--campaign-id <id>]
  */
 
-const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { requireEnv } = require("../shared/env");
 const { projectPath, ensureDir, timestamp } = require("../shared/utils");
+const {
+  getLeadCategories,
+  exportCampaignCsv,
+  exportAllLeadsCsv,
+} = require("../shared/smartlead");
 
 const DATA_RAW = projectPath("data", "raw");
 ensureDir(DATA_RAW);
-
-const apiKey = requireEnv("SMARTLEAD_API_KEY");
-
-function run(cmd) {
-  return execSync(cmd, { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 });
-}
-
-function smartlead(args) {
-  return run(`smartlead --api-key "${apiKey}" ${args}`);
-}
 
 async function main() {
   const campaignIdArg = process.argv.find((a) => a === "--campaign-id");
@@ -33,8 +26,8 @@ async function main() {
 
   console.log("Fetching lead categories...");
   try {
-    const categories = smartlead("leads categories --format json");
-    console.log("Available categories:", categories.trim());
+    const categories = getLeadCategories();
+    console.log("Available categories:", JSON.stringify(categories));
   } catch {
     console.log("Could not fetch categories, continuing...");
   }
@@ -44,14 +37,18 @@ async function main() {
   if (campaignId) {
     const outFile = path.join(DATA_RAW, `campaign_${campaignId}_${ts}.csv`);
     console.log(`Exporting campaign ${campaignId}...`);
-    smartlead(`campaigns export --id ${campaignId} --out "${outFile}"`);
-    console.log(`Saved to ${outFile}`);
+    const success = exportCampaignCsv(campaignId, outFile);
+    console.log(success ? `Saved to ${outFile}` : `Export failed for campaign ${campaignId}`);
   } else {
     const outFile = path.join(DATA_RAW, `all_leads_${ts}.csv`);
     console.log("Exporting all leads across campaigns...");
-    const csv = smartlead("leads list-all --all --format csv");
-    fs.writeFileSync(outFile, csv);
-    console.log(`Saved ${csv.split("\n").length - 1} leads to ${outFile}`);
+    const csv = exportAllLeadsCsv();
+    if (csv) {
+      fs.writeFileSync(outFile, csv);
+      console.log(`Saved ${csv.split("\n").length - 1} leads to ${outFile}`);
+    } else {
+      console.error("Failed to export leads.");
+    }
   }
 
   const files = fs.readdirSync(DATA_RAW);

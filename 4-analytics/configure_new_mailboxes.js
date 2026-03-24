@@ -11,7 +11,13 @@
  *   - Unique signatures matching active account branding
  */
 
-const { apiRequest, listCampaigns } = require("../shared/smartlead");
+const {
+  listCampaigns,
+  listEmailAccounts,
+  getEmailAccount,
+  updateEmailAccount,
+  setWarmup,
+} = require("../shared/smartlead");
 const { ensureDir, projectPath, timestamp } = require("../shared/utils");
 const fs = require("fs");
 
@@ -152,7 +158,7 @@ async function main() {
 
   // Step 1: Pull all accounts from API
   console.log("1. Fetching all email accounts from SmartLead...");
-  const allAccounts = await apiRequest("GET", "/email-accounts");
+  const allAccounts = await listEmailAccounts();
   console.log(`   Total accounts: ${allAccounts.length}`);
 
   // Step 2: Identify new accounts by domain
@@ -218,7 +224,7 @@ async function main() {
     // Apply daily sending limit + signature
     console.log(`   Applying settings: max_email_per_day=5, signature...`);
     try {
-      await apiRequest("POST", `/email-accounts/${account.id}`, {
+      await updateEmailAccount(account.id, {
         max_email_per_day: 5,
         signature: signatureHtml,
       });
@@ -237,9 +243,7 @@ async function main() {
     // Ensure warmup is enabled
     console.log(`   Enabling warmup...`);
     try {
-      await apiRequest("POST", `/email-accounts/${account.id}/warmup`, {
-        warmup_enabled: true,
-      });
+      await setWarmup(account.id, true);
       console.log(`   Warmup enabled.`);
     } catch (err) {
       console.error(`   WARNING: Warmup toggle failed: ${err.message}`);
@@ -247,10 +251,7 @@ async function main() {
 
     // Verify by re-reading
     console.log(`   Verifying...`);
-    const verified = await apiRequest(
-      "GET",
-      `/email-accounts/${account.id}`
-    );
+    const verified = await getEmailAccount(account.id);
     const vwd = verified.warmup_details || {};
 
     const record = {
