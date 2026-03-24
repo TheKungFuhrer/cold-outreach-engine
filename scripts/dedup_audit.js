@@ -145,4 +145,83 @@ function scoreCluster(reasons) {
   return 50;
 }
 
-module.exports = { loadAndNormalize, runLayers, scoreCluster, STAGE_RANK, SOURCE_RANK };
+function selectKeepRecord(clusterRecords) {
+  let best = clusterRecords[0];
+  for (let i = 1; i < clusterRecords.length; i++) {
+    const candidate = clusterRecords[i];
+    // Primary: _score
+    if (candidate._score !== best._score) {
+      if (candidate._score > best._score) best = candidate;
+      continue;
+    }
+    // Secondary: richness
+    const richness = (r) => {
+      let pts = 0;
+      if (r._email) pts += 3;
+      if (r._phone) pts += 2;
+      if (r._firstName && r._lastName) pts += 2;
+      if (r._companyNorm) pts += 1;
+      if (r._city || r._state) pts += 1;
+      if (r._pipelineStage && STAGE_RANK[r._pipelineStage] !== undefined) pts += 1;
+      return pts;
+    };
+    const rc = richness(candidate), rb = richness(best);
+    if (rc !== rb) {
+      if (rc > rb) best = candidate;
+      continue;
+    }
+    // Tertiary: pipeline stage rank
+    const stageC = STAGE_RANK[candidate._pipelineStage] ?? -1;
+    const stageB = STAGE_RANK[best._pipelineStage] ?? -1;
+    if (stageC !== stageB) {
+      if (stageC > stageB) best = candidate;
+      continue;
+    }
+    // Quaternary: source rank
+    const srcC = SOURCE_RANK[candidate._source] ?? 0;
+    const srcB = SOURCE_RANK[best._source] ?? 0;
+    if (srcC > srcB) best = candidate;
+  }
+  return best._id;
+}
+
+function buildClusterOutput(uf, records) {
+  const components = uf.components();
+  const clusters = components.map((comp) => {
+    const clusterRecords = comp.ids.map((id) => records[id]);
+    const reasons = comp.reasons;
+    const confidence = scoreCluster(reasons);
+    const keepId = selectKeepRecord(clusterRecords);
+    return {
+      ids: comp.ids,
+      keepId,
+      confidence,
+      reasons,
+      records: clusterRecords,
+    };
+  });
+
+  const byConfidence = {};
+  const byReason = {};
+  let estimatedDuplicateRecords = 0;
+  for (const c of clusters) {
+    const band = c.confidence >= 95 ? "high" : c.confidence >= 80 ? "medium" : "low";
+    byConfidence[band] = (byConfidence[band] || 0) + 1;
+    for (const r of c.reasons) {
+      byReason[r] = (byReason[r] || 0) + 1;
+    }
+    estimatedDuplicateRecords += c.ids.length - 1;
+  }
+
+  return {
+    clusters,
+    summary: {
+      totalClusters: clusters.length,
+      byConfidence,
+      byReason,
+      estimatedDuplicateRecords,
+    },
+  };
+}
+
+module.exports = { loadAndNormalize, runLayers, scoreCluster, selectKeepRecord, buildClusterOutput, STAGE_RANK, SOURCE_RANK };

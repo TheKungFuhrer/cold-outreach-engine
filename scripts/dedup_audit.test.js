@@ -4,7 +4,8 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const { loadAndNormalize, runLayers, scoreCluster } = require("./dedup_audit.js");
+const { loadAndNormalize, runLayers, scoreCluster, selectKeepRecord, buildClusterOutput } = require("./dedup_audit.js");
+const { UnionFind } = require("../shared/dedup-helpers.js");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,4 +73,46 @@ describe("scoreCluster", () => {
   it("phone alone gives 80", () => { expect(scoreCluster(["phone_match"])).toBe(80); });
   it("cross_domain_name gives 80", () => { expect(scoreCluster(["cross_domain_name"])).toBe(80); });
   it("fuzzy_name+geo alone gives 70", () => { expect(scoreCluster(["fuzzy_name+geo"])).toBe(70); });
+});
+
+describe("selectKeepRecord", () => {
+  it("prefers record with higher score", () => {
+    const records = [
+      { _id: 0, _score: 42, _phone: "", _firstName: "", _lastName: "", _companyNorm: "", _city: "", _state: "", _pipelineStage: "", _source: "geolead" },
+      { _id: 1, _score: 87, _phone: "", _firstName: "", _lastName: "", _companyNorm: "", _city: "", _state: "", _pipelineStage: "", _source: "geolead" },
+    ];
+    expect(selectKeepRecord(records)).toBe(1);
+  });
+
+  it("falls back to richness when scores are equal", () => {
+    const records = [
+      { _id: 0, _score: 0, _phone: "", _firstName: "", _lastName: "", _companyNorm: "", _city: "", _state: "", _pipelineStage: "", _source: "geolead" },
+      { _id: 1, _score: 0, _phone: "5551234567", _firstName: "Jane", _lastName: "Doe", _companyNorm: "acme", _city: "Austin", _state: "TX", _pipelineStage: "enriched", _source: "geolead" },
+    ];
+    expect(selectKeepRecord(records)).toBe(1);
+  });
+
+  it("breaks tie with source preference", () => {
+    const records = [
+      { _id: 0, _score: 0, _phone: "", _firstName: "", _lastName: "", _companyNorm: "", _city: "", _state: "", _pipelineStage: "", _source: "geolead" },
+      { _id: 1, _score: 0, _phone: "", _firstName: "", _lastName: "", _companyNorm: "", _city: "", _state: "", _pipelineStage: "", _source: "smartlead" },
+    ];
+    expect(selectKeepRecord(records)).toBe(1);
+  });
+});
+
+describe("buildClusterOutput", () => {
+  it("returns correct cluster structure for two united records", () => {
+    const uf = new UnionFind(2);
+    uf.union(0, 1, "exact_email");
+    const records = [
+      { _id: 0, _score: 0, _phone: "", _firstName: "", _lastName: "", _companyNorm: "", _city: "", _state: "", _pipelineStage: "", _source: "geolead" },
+      { _id: 1, _score: 0, _phone: "", _firstName: "", _lastName: "", _companyNorm: "", _city: "", _state: "", _pipelineStage: "", _source: "geolead" },
+    ];
+    const { clusters, summary } = buildClusterOutput(uf, records);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].confidence).toBe(100);
+    expect(clusters[0].records).toHaveLength(2);
+    expect(summary.totalClusters).toBe(1);
+  });
 });
