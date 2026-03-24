@@ -142,55 +142,56 @@ describe("skool identity adapter", () => {
     expect(detectSource({ survey_a3: "Referred by Sarah" })).toBe("skool_referred");
   });
 
-  it("loadSkoolMembers inserts from survey_a1 email", () => {
-    const progress = {
-      processed: {
-        "abc123": {
-          id: "abc123",
-          full_name: "Jane Doe",
-          survey_a1: "Jane@Venue.com",
-          survey_a2: "555-1234",
-          email: "",
-          classification: "active_venue_owner",
-          ghl_contact_id: "ghl_001",
-        },
+  it("loadSkoolMembers inserts GHL contacts with skool_member=1", () => {
+    const ghlContacts = [
+      {
+        id: "ghl_001",
+        email: "Jane@Venue.com",
+        firstName: "Jane",
+        lastName: "Doe",
+        phone: "+15551234567",
+        companyName: "Doe Venue",
+        website: "doevenue.com",
+        tags: ["skool"],
       },
-    };
-    const result = loadSkoolMembers(progress);
+    ];
+    const result = loadSkoolMembers(ghlContacts);
     expect(result.inserted).toBe(1);
+    expect(result.skipped).toBe(0);
 
     const db = openSkoolDb(TEST_DB_PATH);
     const row = db.prepare("SELECT * FROM contacts WHERE email = ?").get("jane@venue.com");
     expect(row.skool_member).toBe(1);
-    expect(row.skool_member_id).toBe("abc123");
-    expect(row.skool_classification).toBe("active_venue_owner");
     expect(row.ghl_contact_id).toBe("ghl_001");
+    expect(row.first_name).toBe("Jane");
+    expect(row.company_name).toBe("Doe Venue");
   });
 
-  it("loadSkoolMembers creates dual rows when survey_a1 and email differ", () => {
-    const progress = {
-      processed: {
-        "def456": {
-          id: "def456",
-          full_name: "Bob Smith",
-          survey_a1: "bob@business.com",
-          email: "bob@skool.com",
-          classification: "aspiring_venue_owner",
-          ghl_contact_id: "ghl_002",
-        },
-      },
-    };
-    const result = loadSkoolMembers(progress);
-    expect(result.inserted).toBe(2);
-    expect(result.dual_email).toBe(1);
+  it("loadSkoolMembers skips contacts without email", () => {
+    const ghlContacts = [
+      { id: "ghl_002", email: "", firstName: "No", lastName: "Email", tags: ["skool"] },
+      { id: "ghl_003", email: "has@email.com", firstName: "Has", lastName: "Email", tags: ["skool"] },
+    ];
+    const result = loadSkoolMembers(ghlContacts);
+    expect(result.inserted).toBe(1);
+    expect(result.skipped).toBe(1);
+  });
 
+  it("loadSkoolMembers upserts without overwriting cold outreach data", () => {
     const db = openSkoolDb(TEST_DB_PATH);
-    const row1 = db.prepare("SELECT * FROM contacts WHERE email = ?").get("bob@business.com");
-    const row2 = db.prepare("SELECT * FROM contacts WHERE email = ?").get("bob@skool.com");
-    expect(row1.skool_member_id).toBe("def456");
-    expect(row2.skool_member_id).toBe("def456");
-    expect(row1.ghl_contact_id).toBe("ghl_002");
-    expect(row2.ghl_contact_id).toBe("ghl_002");
+    db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead, first_seen_cold)
+                VALUES (?, ?, ?, 1, ?)`).run("overlap@test.com", "test.com", "cold_outreach", "2026-01-01T00:00:00Z");
+
+    const ghlContacts = [
+      { id: "ghl_004", email: "Overlap@Test.com", firstName: "Over", lastName: "Lap", tags: ["skool"] },
+    ];
+    loadSkoolMembers(ghlContacts);
+
+    const row = db.prepare("SELECT * FROM contacts WHERE email = ?").get("overlap@test.com");
+    expect(row.cold_outreach_lead).toBe(1);
+    expect(row.skool_member).toBe(1);
+    expect(row.source).toBe("cold_outreach"); // source not overwritten
+    expect(row.ghl_contact_id).toBe("ghl_004");
   });
 
   it("getUntaggedOverlaps returns overlaps with ghl_contact_id", () => {
