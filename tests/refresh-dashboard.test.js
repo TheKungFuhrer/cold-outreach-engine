@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { latestFile, buildFunnel, buildCampaigns, buildScoreDistribution } from "../scripts/refresh-dashboard.js";
+import { latestFile, buildFunnel, buildCampaigns, buildScoreDistribution, buildCosts } from "../scripts/refresh-dashboard.js";
 
 describe("refresh-dashboard", () => {
   describe("latestFile", () => {
@@ -81,6 +81,23 @@ describe("refresh-dashboard", () => {
       expect(result.buckets[2].count).toBe(2);  // 21-30
       expect(result.mean).toBeCloseTo(49.5, 0);
       expect(result.median).toBeCloseTo(40, 0);
+    });
+  });
+
+  describe("buildCosts", () => {
+    it("should reshape cost report into per-stage array", () => {
+      const costReport = {
+        haiku: { records: 14052, cost: 42.15 },
+        sonnet: { records: 76, cost: 3.80 },
+        numverify: { calls: 8958, cost: 8.96 },
+        smartlead_verification: { cost: 0 },
+        total_cost: 54.91,
+      };
+      const result = buildCosts(costReport);
+      expect(result.perStage).toHaveLength(4);
+      expect(result.perStage[0].stage).toBe("haiku");
+      expect(result.perStage[0].costPerLead).toBeCloseTo(0.003, 3);
+      expect(result.totalSpend).toBe(54.91);
     });
   });
 });

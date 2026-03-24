@@ -11,6 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const { projectPath, ensureDir } = require("../shared/utils");
 const { loadJson, saveJson } = require("../shared/progress");
+const { readCsv } = require("../shared/csv");
 const ARTIFACTS_DIR = projectPath("data", "artifacts");
 
 /**
@@ -219,15 +220,155 @@ function buildDeadLeads(syncData) {
   return { bounced, unsubscribed, total: bounced + unsubscribed };
 }
 
-// Placeholder refresh — will be completed in Task 4
-async function refresh() {
-  ensureDir(ARTIFACTS_DIR);
+// --- Costs ---
 
-  // Load funnel report
+function buildCosts(costReport) {
+  if (!costReport) return { perStage: [], totalSpend: 0 };
+
+  const perStage = [];
+  const stages = ["haiku", "sonnet", "numverify", "smartlead_verification"];
+
+  for (const stage of stages) {
+    const data = costReport[stage];
+    if (!data) continue;
+    const records = data.records || data.calls || 0;
+    const cost = data.cost || 0;
+    perStage.push({
+      stage,
+      costPerLead: records > 0 ? +(cost / records).toFixed(4) : 0,
+      totalCost: +cost.toFixed(2),
+    });
+  }
+
+  return {
+    perStage,
+    totalSpend: +(costReport.total_cost || 0).toFixed(2),
+  };
+}
+
+// --- Freshness ---
+
+function buildFreshness(funnel) {
+  if (!funnel || !funnel.stages) return { stages: [] };
+
+  const stages = [];
+  for (let i = 0; i < funnel.stages.length - 1; i++) {
+    const current = funnel.stages[i];
+    const next = funnel.stages[i + 1];
+    const unprocessed = Math.max(0, current.count - next.count);
+
+    // Check oldest file modification time in the stage directory
+    const stageDirs = {
+      raw: "data/enriched",
+      filtered: "data/filtered",
+      classified: "data/classified",
+      validated: "data/phone_validated",
+      uploaded: "data/upload",
+    };
+    let oldestDays = 0;
+    const dir = stageDirs[current.name];
+    if (dir) {
+      const fullDir = projectPath(dir);
+      try {
+        const files = fs.readdirSync(fullDir).filter(f => f.endsWith(".csv"));
+        if (files.length > 0) {
+          const oldest = files
+            .map(f => fs.statSync(path.join(fullDir, f)).mtimeMs)
+            .reduce((min, t) => Math.min(min, t), Infinity);
+          oldestDays = Math.floor((Date.now() - oldest) / (1000 * 60 * 60 * 24));
+        }
+      } catch (e) { /* dir may not exist */ }
+    }
+
+    stages.push({
+      name: current.name,
+      unprocessedCount: unprocessed,
+      oldestDays,
+    });
+  }
+
+  return { stages };
+}
+
+// --- Source Quality ---
+
+function buildSourceQuality(masterMap, scoreByEmail) {
+  if (!masterMap) return { bySource: [], byDetail: [] };
+
+  const srcGroups = new Map();
+  const detailGroups = new Map();
+
+  for (const [, emails] of masterMap) {
+    for (const [email, record] of emails) {
+      const source = record.source || "unknown";
+      const detail = record.source_detail || "unknown";
+      const score = scoreByEmail?.get(email) || 0;
+      const inCampaign = record.pipeline_stage === "in_campaign" ? 1 : 0;
+
+      if (!srcGroups.has(source)) srcGroups.set(source, { count: 0, scoreSum: 0, converted: 0 });
+      const sg = srcGroups.get(source);
+      sg.count++;
+      sg.scoreSum += score;
+      sg.converted += inCampaign;
+
+      if (detail !== "unknown") {
+        if (!detailGroups.has(detail)) detailGroups.set(detail, { count: 0, scoreSum: 0, converted: 0 });
+        const dg = detailGroups.get(detail);
+        dg.count++;
+        dg.scoreSum += score;
+        dg.converted += inCampaign;
+      }
+    }
+  }
+
+  const bySource = [...srcGroups.entries()].map(([source, g]) => ({
+    source,
+    count: g.count,
+    avgScore: g.count > 0 ? +(g.scoreSum / g.count).toFixed(1) : 0,
+    conversionRate: g.count > 0 ? +(g.converted / g.count).toFixed(3) : 0,
+  }));
+
+  const byDetail = [...detailGroups.entries()]
+    .map(([searchTerm, g]) => ({
+      searchTerm,
+      count: g.count,
+      avgScore: g.count > 0 ? +(g.scoreSum / g.count).toFixed(1) : 0,
+      conversionRate: g.count > 0 ? +(g.converted / g.count).toFixed(3) : 0,
+    }))
+    .sort((a, b) => b.avgScore - a.avgScore);
+
+  return { bySource, byDetail };
+}
+
+// --- Full Refresh ---
+
+/**
+ * @param {object} [options]
+ * @param {string} [options.lastSyncAt] - ISO timestamp of previous sync. Passed from daily-sync.js
+ *   to ensure hot leads are calculated relative to the correct baseline (before checkpoint update).
+ *   When omitted (standalone refresh), defaults to 24h ago inside buildHotLeads.
+ */
+async function refresh({ lastSyncAt } = {}) {
+  ensureDir(ARTIFACTS_DIR);
+  console.log("Refreshing dashboard data...");
+
+  // Load all source files
   const funnelPath = latestFile("data/reports/funnel_report_*.json");
   const funnelReport = funnelPath ? loadJson(funnelPath) : null;
 
-  // Try to load master
+  const statsPath = latestFile("data/reports/campaign_stats_*.json");
+  const statsReport = statsPath ? loadJson(statsPath) : null;
+
+  const costPath = latestFile("data/reports/cost_report_*.json");
+  const costReport = costPath ? loadJson(costPath) : null;
+
+  const syncPath = latestFile("data/lifecycle/smartlead_sync_*.json");
+  const syncData = syncPath ? loadJson(syncPath) : null;
+
+  const scoredPath = latestFile("data/scored/scored_venues_*.csv");
+  const scoredRows = scoredPath ? readCsv(scoredPath).records : [];
+
+  // Try master
   let masterMap = null;
   try {
     const { loadMaster } = require("../shared/master");
@@ -236,18 +377,33 @@ async function refresh() {
     console.warn("  [warn] Could not load master CSV:", e.message);
   }
 
+  // Build score lookup
+  const scoreByEmail = new Map();
+  for (const row of scoredRows) {
+    const email = (row.email || "").toLowerCase().trim();
+    if (email) scoreByEmail.set(email, Number(row.score) || 0);
+  }
+
+  // Build all sections
   const funnel = buildFunnel(funnelReport, masterMap);
+  const campaigns = buildCampaigns(statsReport);
+  const scoreDistribution = buildScoreDistribution(scoredRows);
+  const hotLeads = buildHotLeads(syncData, scoredRows, masterMap, lastSyncAt);
+  const deadLeads = buildDeadLeads(syncData);
+  const costs = buildCosts(costReport);
+  const freshness = buildFreshness(funnel);
+  const sourceQuality = buildSourceQuality(masterMap, scoreByEmail);
 
   const data = {
     generatedAt: new Date().toISOString(),
     funnel,
-    campaigns: [],
-    scoreDistribution: { buckets: [], mean: 0, median: 0 },
-    hotLeads: [],
-    deadLeads: { bounced: 0, unsubscribed: 0, total: 0 },
-    costs: { perStage: [], totalSpend: 0 },
-    freshness: { stages: [] },
-    sourceQuality: { bySource: [], byDetail: [] },
+    campaigns,
+    scoreDistribution,
+    hotLeads,
+    deadLeads,
+    costs,
+    freshness,
+    sourceQuality,
   };
 
   const outPath = path.join(ARTIFACTS_DIR, "dashboard-data.json");
@@ -256,7 +412,18 @@ async function refresh() {
   return data;
 }
 
-module.exports = { refresh, latestFile, buildFunnel, buildCampaigns, buildScoreDistribution, buildHotLeads, buildDeadLeads };
+module.exports = {
+  refresh,
+  latestFile,
+  buildFunnel,
+  buildCampaigns,
+  buildScoreDistribution,
+  buildHotLeads,
+  buildDeadLeads,
+  buildCosts,
+  buildFreshness,
+  buildSourceQuality,
+};
 
 // CLI entry point
 if (require.main === module) {
