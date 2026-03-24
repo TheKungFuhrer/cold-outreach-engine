@@ -33,6 +33,27 @@ async function main() {
     console.log("\nStep 2: No hot leads — skipping GHL push.");
   }
 
+  // Step 3: Refresh dashboard data
+  // IMPORTANT: Pass lastSyncAt from the sync report's generated_at timestamp.
+  // The sync checkpoint has already been updated by this point, so we can't read it.
+  // The report.generated_at captures when the sync started (before checkpoint update).
+  console.log("\n--- Step 3: Refresh dashboard data ---");
+  try {
+    const { refresh } = require("./refresh-dashboard");
+    const dashboardData = await refresh({ lastSyncAt: report?.generated_at });
+
+    // Step 4: Send daily email
+    console.log("\n--- Step 4: Send daily email ---");
+    try {
+      const { sendDailyEmail } = require("./daily-email");
+      await sendDailyEmail(dashboardData);
+    } catch (emailErr) {
+      console.error("  [warn] Daily email failed (non-fatal):", emailErr.message);
+    }
+  } catch (refreshErr) {
+    console.error("  [warn] Dashboard refresh failed (non-fatal):", refreshErr.message);
+  }
+
   console.log("\n=== Daily Sync Complete ===");
 }
 
