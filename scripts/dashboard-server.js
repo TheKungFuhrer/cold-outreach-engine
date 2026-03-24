@@ -8,8 +8,9 @@
  * Env: DASHBOARD_PORT (default 7777), DASHBOARD_USER (default admin), DASHBOARD_PASS (required)
  */
 
+require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") });
+
 const express = require("express");
-const basicAuth = require("express-basic-auth");
 const path = require("path");
 const fs = require("fs");
 const { projectPath } = require("../shared/utils");
@@ -27,12 +28,18 @@ if (!PASS) {
 
 const app = express();
 
-// Basic auth
-app.use(basicAuth({
-  users: { [USER]: PASS },
-  challenge: true,
-  realm: "OMG Outreach Dashboard",
-}));
+// Basic HTTP auth
+app.use((req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith("Basic ")) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="OMG Outreach Dashboard"');
+    return res.status(401).send("Authentication required");
+  }
+  const [user, pass] = Buffer.from(auth.slice(6), "base64").toString().split(":");
+  if (user === USER && pass === PASS) return next();
+  res.setHeader("WWW-Authenticate", 'Basic realm="OMG Outreach Dashboard"');
+  res.status(401).send("Invalid credentials");
+});
 
 // GET / — refresh data, serve dashboard HTML
 app.get("/", async (req, res) => {
