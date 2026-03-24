@@ -1,7 +1,7 @@
 /**
  * Union-Find (Disjoint Set Union) with path compression and reason tracking.
  */
-export class UnionFind {
+class UnionFind {
   constructor(size) {
     this.parent = Array.from({ length: size }, (_, i) => i);
     this.rank = new Uint8Array(size);
@@ -62,7 +62,7 @@ export class UnionFind {
   }
 }
 
-export function levenshtein(a, b) {
+function levenshtein(a, b) {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
@@ -84,7 +84,7 @@ export function levenshtein(a, b) {
   return row[m];
 }
 
-export function tokenOverlap(a, b) {
+function tokenOverlap(a, b) {
   if (!a || !b) return 0;
   const setA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
   const setB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
@@ -95,7 +95,7 @@ export function tokenOverlap(a, b) {
   return union === 0 ? 0 : intersection / union;
 }
 
-export function normalizeCompanyName(name) {
+function normalizeCompanyName(name) {
   if (!name) return "";
   let s = String(name).toLowerCase().trim();
   s = s.replace(/[,\s]+(llc|inc\.?|corp\.?|ltd\.?|co\.?|l\.?l\.?c\.?|incorporated|corporation|limited|company)\s*\.?\s*$/i, "");
@@ -104,8 +104,13 @@ export function normalizeCompanyName(name) {
   return s;
 }
 
-export function normalizePhone(phone) {
+function normalizePhone(phone) {
   if (!phone) return "";
   const digits = String(phone).replace(/\D/g, "");
   return digits.length >= 7 ? digits : "";
 }
+
+module.exports = {
+  UnionFind, levenshtein, tokenOverlap,
+  normalizeCompanyName, normalizePhone,
+};
