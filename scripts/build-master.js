@@ -339,7 +339,6 @@ function ingestScores(map) {
 function computePipelineStage(record) {
   if (record._has_engagement === "yes") return "in_campaign";
   if (record._in_smartlead === "yes") return "uploaded";
-  if (record.email_source && record.email_source.startsWith("anymailfinder")) return "enriched";
   if (record.phone_type) return "validated";
   if (record.is_venue) return "classified";
   if (record._is_filtered === "yes") return "filtered";

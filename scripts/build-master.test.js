@@ -127,8 +127,8 @@ describe("computePipelineStage", () => {
     expect(computePipelineStage({ _in_smartlead: "yes" })).toBe("uploaded");
   });
 
-  it("returns enriched for anymailfinder emails", () => {
-    expect(computePipelineStage({ email_source: "anymailfinder_original" })).toBe("enriched");
+  it("returns raw for anymailfinder emails (enriched stage removed)", () => {
+    expect(computePipelineStage({ email_source: "anymailfinder_original" })).toBe("raw");
   });
 
   it("returns validated when phone_type set", () => {
