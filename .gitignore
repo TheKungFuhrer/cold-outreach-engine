@@ -15,6 +15,9 @@ __pycache__/
 # Logs
 *.log
 
+# Worktrees
+.claude/worktrees/
+
 # OS
 Thumbs.db
 .DS_Store
