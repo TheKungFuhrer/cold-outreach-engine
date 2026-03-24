@@ -2,102 +2,138 @@
 
 ## Problem
 
-SmartLead API logic is scattered across 10 scripts. `shared/smartlead.js` exists but only covers 8 of ~21 needed functions. Two analytics scripts bypass it entirely with direct `apiRequest()` calls. Two prospecting scripts shell out to the SmartLead CLI without any shared wrapper. This makes the API surface hard to maintain, debug, and extend.
+SmartLead API logic is scattered across 10 scripts. `shared/smartlead.js` currently exports 13 symbols (including internal helpers like `apiRequest`, `getApiKey`, `RateLimiter`, `BASE_URL`). Two analytics scripts import `apiRequest` directly and bypass the named wrapper pattern. Two prospecting scripts shell out to the SmartLead CLI without any shared wrapper. This makes the API surface hard to maintain, debug, and extend.
 
 ## Decision
 
-Extend `shared/smartlead.js` as a flat module (no class refactor). Add ~13 new functions covering every SmartLead interaction in the codebase. Wrap CLI commands too. Add opt-in debug logging. Refactor 4 files that currently bypass the module.
+Extend `shared/smartlead.js` as a flat module (no class refactor). Add ~13 new named functions covering every SmartLead interaction in the codebase. Wrap CLI commands too. Add opt-in debug logging. Refactor 4 files that currently bypass the module. Remove `apiRequest` from exports — all callers use named functions only.
 
 ## Architecture
 
 ### Module Structure
 
-`shared/smartlead.js` remains a flat file of exported async functions. Functions are organized by JSDoc comment groups:
+`shared/smartlead.js` remains a flat file of exported async functions. Functions organized by JSDoc comment groups:
 
 ```
-// --- Core (existing) ---
-apiRequest(method, path, body, retries)   // internal, not exported
-RateLimiter                                // internal class
+// --- Core (internal only, NOT exported after refactor) ---
+apiRequest(method, path, body, retries)   // HTTP helper with rate limiting + retry
+RateLimiter                                // token bucket rate limiter
+getApiKey()                                // reads SMARTLEAD_API_KEY from env
+BASE_URL                                   // https://server.smartlead.ai/api/v1
+debugLog(msg)                              // NEW — logs to stderr when SMARTLEAD_DEBUG=1
+parseCLIOutput(output)                     // NEW — parses CLI JSON/text output
+runCLI(args, opts)                         // NEW — execSync wrapper with debug logging
 
-// --- Campaigns ---
+// --- Campaigns (exported) ---
 listCampaigns()
 getCampaign(campaignId)
-getCampaignStats(campaignId)
-getCampaignAnalytics(campaignId)           // NEW
-getCampaignEmailAccounts(campaignId)       // NEW
+getCampaignStats(campaignId)               // GET /campaigns/{id}/stats (existing)
+getCampaignLeadStats(campaignId)           // GET /campaigns/{id}/leads/stats (existing, kept)
+getCampaignAnalytics(campaignId)           // NEW — GET /campaigns/{id}/analytics
+getCampaignEmailAccounts(campaignId)       // NEW — GET /campaigns/{id}/email-accounts
 
-// --- Leads ---
+// --- Leads (exported) ---
 uploadLeads(campaignId, leads, settings)
 addLeadsToCampaign(campaignId, emailList)
 chunkArray(arr, size)
 
-// --- Email Verification ---
+// --- Email Verification (exported) ---
 verifyEmails(campaignId)
 getVerificationStatus(campaignId)
 
-// --- Email Accounts ---                   // NEW group
+// --- Email Accounts (NEW group, exported) ---
 listEmailAccounts()
 getEmailAccount(accountId)
-updateEmailAccount(accountId, config)
+updateEmailAccount(accountId, config)      // POST /email-accounts/{id} (SmartLead uses POST, not PATCH)
 getWarmupStats(accountId)
 setWarmup(accountId, enabled)
 
-// --- Prospect (CLI wrappers) ---          // NEW group
+// --- Prospect (NEW CLI wrappers, exported) ---
 prospectSearch(query)
 prospectFindEmails(domain)
 
-// --- Data Export (CLI wrappers) ---        // NEW group
-exportCampaignCsv(campaignId, outPath)
-exportAllLeadsCsv()
-getLeadCategories()
+// --- Data Export (NEW CLI wrappers, exported) ---
+exportCampaignCsv(campaignId, outPath)     // outPath required — caller decides where
+exportAllLeadsCsv()                        // returns CSV string
+getLeadCategories()                        // returns parsed JSON array
 ```
 
-Total: ~22 exported functions + RateLimiter + internal helpers.
+**Breaking change:** `apiRequest`, `getApiKey`, `RateLimiter`, and `BASE_URL` are removed from `module.exports`. All callers must use named wrapper functions. `mailbox_audit.js` and `configure_new_mailboxes.js` currently import `apiRequest` and will be refactored.
 
 ### Debug Logging
 
-Controlled by `SMARTLEAD_DEBUG=1` environment variable. When enabled, logs to stderr:
+Controlled by `SMARTLEAD_DEBUG` environment variable, cached once at module load:
 
-```
-[SmartLead] GET /campaigns → 200 (234ms)
-[SmartLead] POST /campaigns/3071191/leads (400 leads) → 200 (1.8s)
-[SmartLead] CLI: smartlead prospect search --query "wedding venue TX" → OK (1.2s)
-```
+- **Off (default):** No logging. Normal runs stay clean.
+- **`SMARTLEAD_DEBUG=1`:** One-line summaries to stderr:
+  ```
+  [SmartLead] GET /campaigns → 200 (234ms)
+  [SmartLead] POST /campaigns/3071191/leads (400 leads) → 200 (1.8s)
+  [SmartLead] CLI: prospect search --query "wedding venue TX" → OK (1.2s)
+  ```
+- **`SMARTLEAD_DEBUG=verbose`:** Summary lines + full response bodies (for debugging).
 
-Implementation: a `debugLog(msg)` helper that checks `process.env.SMARTLEAD_DEBUG` once at module load. REST calls log method, path, status, and duration. CLI calls log the command and duration. Response bodies are NOT logged by default (too large for batch uploads). Full response logging available via `SMARTLEAD_DEBUG=verbose`.
+CLI stderr output is suppressed in non-debug mode (`stdio: ["pipe", "pipe", "pipe"]`). In verbose mode, CLI stderr is forwarded to the debug log.
 
 ### CLI Wrapper Pattern
 
-CLI wrappers follow a consistent pattern:
+All CLI wrappers use an internal `runCLI(args, opts)` helper:
 
 ```javascript
-/**
- * Search for prospects matching a query.
- * @param {string} query - Search query (e.g. "wedding venue TX")
- * @returns {Array<Object>} Array of prospect results
- */
-async function prospectSearch(query) {
+function runCLI(args, { timeout = 60000, maxBuffer = 50 * 1024 * 1024 } = {}) {
   const apiKey = getApiKey();
+  const cmd = `smartlead --api-key ${apiKey} ${args}`;
   const start = Date.now();
   try {
-    const output = execSync(
-      `smartlead --api-key ${apiKey} prospect search --query "${query}"`,
-      { encoding: "utf-8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"] }
-    );
-    debugLog(`CLI: prospect search --query "${query}" → OK (${Date.now() - start}ms)`);
-    return parseCLIOutput(output);
+    const output = execSync(cmd, {
+      encoding: "utf-8", timeout, maxBuffer,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    debugLog(`CLI: ${args} → OK (${Date.now() - start}ms)`);
+    return output;
   } catch (err) {
-    debugLog(`CLI: prospect search --query "${query}" → ERROR (${Date.now() - start}ms)`);
-    return [];
+    debugLog(`CLI: ${args} → ERROR (${Date.now() - start}ms): ${err.message.split("\\n")[0]}`);
+    return null;
   }
 }
 ```
 
-Key aspects:
-- API key passed explicitly via `--api-key` flag (not relying on global CLI config)
-- Timeout enforcement (60s for searches, 120s for exports)
-- Graceful error handling — returns empty array/null on failure, never throws
-- JSON output parsing with fallback for non-JSON CLI output
+`parseCLIOutput(output)` handles the known SmartLead CLI output formats:
+1. Pure JSON array → parse and return
+2. JSON object with `.data` or `.results` field → unwrap and return the array
+3. Non-JSON text → return null (caller handles gracefully)
+4. Null input (from runCLI failure) → return empty array
+
+CLI wrappers never throw. They return `[]` or `null` on failure.
+
+```javascript
+/**
+ * Search for prospects matching a query via SmartLead CLI.
+ * @param {string} query - Search query (e.g. "wedding venue TX")
+ * @returns {Array<Object>} Prospect results, or [] on failure
+ * @note Never throws — returns empty array on CLI failure
+ */
+function prospectSearch(query) {
+  const output = runCLI(`prospect search --query "${query}"`);
+  return parseCLIOutput(output) || [];
+}
+```
+
+### `exportCampaignCsv` Signature
+
+Takes an explicit `outPath` parameter. The caller decides the file location:
+
+```javascript
+/**
+ * Export campaign leads to a CSV file via SmartLead CLI.
+ * @param {string|number} campaignId - Campaign ID
+ * @param {string} outPath - Absolute path for the output CSV
+ * @returns {boolean} true if export succeeded, false on failure
+ */
+function exportCampaignCsv(campaignId, outPath) { ... }
+```
+
+Both call sites (`pull_leads.js` and `daily-prospect.js`) already construct their own output paths, so this signature matches existing usage.
 
 ### JSDoc Standard
 
@@ -115,31 +151,48 @@ Every exported function gets:
  */
 ```
 
+CLI wrappers add `@note Never throws — returns empty array/null on CLI failure`.
+
 ## Files Modified
 
 ### `shared/smartlead.js` — Extended
 
-Add 13 new functions (listed above). Add debug logging infrastructure. Add JSDoc to all existing functions. No changes to existing function signatures or behavior.
+- Add 13 new exported functions (listed above)
+- Add internal helpers: `debugLog`, `runCLI`, `parseCLIOutput`
+- Add JSDoc to all existing and new functions
+- Remove `apiRequest`, `getApiKey`, `RateLimiter`, `BASE_URL` from `module.exports`
+- No changes to existing function signatures or behavior
 
 ### `4-analytics/mailbox_audit.js` — Refactored
 
-**Before:** Defines 5 local functions calling `apiRequest()` directly (lines 22-38).
-**After:** Imports `listEmailAccounts`, `getEmailAccount`, `getWarmupStats`, `getCampaignEmailAccounts`, `getCampaignAnalytics` from shared module. Deletes local function definitions.
+**Before:** Imports `apiRequest` (line 13). Defines 5 local wrapper functions calling it directly (lines 22-38): `listEmailAccounts`, `getEmailAccount`, `getWarmupStats`, `getCampaignEmailAccounts`, `getCampaignAnalytics`.
+
+**After:** Imports named functions from shared module: `listEmailAccounts`, `getEmailAccount`, `getWarmupStats`, `getCampaignEmailAccounts`, `getCampaignAnalytics`. Deletes local function definitions and `apiRequest` import.
 
 ### `4-analytics/configure_new_mailboxes.js` — Refactored
 
-**Before:** Calls `apiRequest()` directly for account configuration (line 221) and warmup (line 240).
-**After:** Imports `listEmailAccounts`, `updateEmailAccount`, `setWarmup` from shared module. Deletes direct API calls.
+**Before:** Imports `apiRequest` (line 14). Makes 4 direct API calls:
+- Line 155: `apiRequest("GET", "/email-accounts")` — listing accounts
+- Line 221: `apiRequest("POST", "/email-accounts/{id}", config)` — configuring account
+- Line 240: `apiRequest("POST", "/email-accounts/{id}/warmup", ...)` — enabling warmup
+- Line 250: `apiRequest("GET", "/email-accounts/{id}")` — verifying configuration
+
+**After:** Imports `listEmailAccounts`, `getEmailAccount`, `updateEmailAccount`, `setWarmup` from shared module. Replaces all 4 `apiRequest` calls with named functions. Deletes `apiRequest` import.
 
 ### `1-prospecting/pull_leads.js` — Refactored
 
-**Before:** Three `execSync` calls to SmartLead CLI (lines 39, 45, 47).
-**After:** Imports `getLeadCategories`, `exportCampaignCsv`, `exportAllLeadsCsv` from shared module.
+**Before:** Three `execSync` calls to SmartLead CLI (lines 36, 47, 52) using a local `smartlead()` helper.
+
+**After:** Imports `getLeadCategories`, `exportCampaignCsv`, `exportAllLeadsCsv` from shared module. Deletes local `smartlead()` helper and `execSync` import.
 
 ### `scripts/daily-prospect.js` — Refactored
 
-**Before:** Three `execSync` calls to SmartLead CLI for prospect search (line 156), find-emails (line 175), and campaign export (line 194).
-**After:** Imports `prospectSearch`, `prospectFindEmails`, `exportCampaignCsv` from shared module.
+**Before:** Three inline `execSync` calls:
+- Line 207: `smartlead prospect search --query` (inside local `prospectSearch` function)
+- Line 297: `smartlead prospect find-emails --from-json` (inside `discoverEmails`)
+- Line 355: `smartlead campaigns export --id` (inside `dedupAgainstExisting`)
+
+**After:** Imports `prospectSearch` (renamed to `slProspectSearch` to avoid collision with local `runProspectSearches` function), `prospectFindEmails`, `exportCampaignCsv` from shared module. The local function at line 186 is renamed from `prospectSearch` to `runProspectSearches` and calls `slProspectSearch(query)` inside its loop. Deletes inline `execSync` calls.
 
 ## Files NOT Modified
 
@@ -152,10 +205,12 @@ Add 13 new functions (listed above). Add debug logging infrastructure. Add JSDoc
 
 ## Verification
 
-1. **Module exports check:** `node -e "const sl = require('./shared/smartlead'); console.log(Object.keys(sl).length, 'exports:', Object.keys(sl).join(', '))"`
-2. **Debug logging:** `SMARTLEAD_DEBUG=1 node 4-analytics/campaign_stats.js` — verify log lines appear
+1. **Module exports check:** `node -e "const sl = require('./shared/smartlead'); console.log(Object.keys(sl).length, 'exports:', Object.keys(sl).join(', '))"` — should list ~22 named functions, no `apiRequest`
+2. **Debug logging:** `SMARTLEAD_DEBUG=1 node 4-analytics/campaign_stats.js` — verify log lines on stderr
 3. **Mailbox audit:** `node 4-analytics/mailbox_audit.js` — verify it works with shared imports
-4. **Daily prospect dry-run:** `node scripts/daily-prospect.js --dry-run` — verify CLI wrappers work
-5. **Funnel tracker:** `node 5-lifecycle/funnel_tracker.js --campaign-id 2434779` — verify existing functions unchanged
-6. **No direct API calls remaining:** `grep -r "apiRequest" --include="*.js" | grep -v shared/smartlead.js | grep -v node_modules` — should return 0 results
-7. **No inline CLI calls remaining:** `grep -rn "execSync.*smartlead" --include="*.js" | grep -v shared/smartlead.js | grep -v node_modules` — should return 0 results
+4. **Configure mailboxes:** `node -e "require('./4-analytics/configure_new_mailboxes')"` — verify it loads without error
+5. **Pull leads:** `node 1-prospecting/pull_leads.js --help 2>&1 || true` — verify it loads without error
+6. **Daily prospect dry-run:** `node scripts/daily-prospect.js --dry-run` — verify CLI wrappers work
+7. **Funnel tracker:** `node 5-lifecycle/funnel_tracker.js --campaign-id 2434779` — verify existing functions unchanged
+8. **No direct API calls remaining:** `grep -r "apiRequest" --include="*.js" | grep -v shared/smartlead.js | grep -v node_modules` — should return 0 results
+9. **No inline CLI calls remaining:** `grep -rn "execSync.*smartlead" --include="*.js" | grep -v shared/smartlead.js | grep -v node_modules` — should return 0 results
