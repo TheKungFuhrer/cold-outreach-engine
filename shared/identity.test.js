@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { openDb, closeDb, SCHEMA_VERSION } from "./identity-db.js";
 import { openDb as openAdapterDb, closeDb as closeAdapterDb, loadColdLeads, checkOverlaps, markSuppressed, getStats } from "./identity.js";
+import { openDb as openSkoolDb, closeDb as closeSkoolDb, loadSkoolMembers, getUntaggedOverlaps, markTagged, detectSource } from "../../skool-engine/scripts/lib/identity.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test_identity.db");
@@ -111,5 +112,108 @@ describe("cold-outreach identity adapter", () => {
 
     const row = db.prepare("SELECT smartlead_suppressed FROM contacts WHERE email = ?").get("test@test.com");
     expect(row.smartlead_suppressed).toBe(1);
+  });
+});
+
+describe("skool identity adapter", () => {
+  beforeEach(() => {
+    openSkoolDb(TEST_DB_PATH);
+  });
+
+  afterEach(() => {
+    closeSkoolDb();
+    for (const ext of ["", "-wal", "-shm"]) {
+      try { fs.unlinkSync(TEST_DB_PATH + ext); } catch {}
+    }
+  });
+
+  it("detectSource returns skool_organic for empty survey_a3", () => {
+    expect(detectSource({ survey_a3: "" })).toBe("skool_organic");
+    expect(detectSource({})).toBe("skool_organic");
+  });
+
+  it("detectSource returns skool_organic for excluded sources", () => {
+    expect(detectSource({ survey_a3: "Found on Google" })).toBe("skool_organic");
+    expect(detectSource({ survey_a3: "Facebook ad" })).toBe("skool_organic");
+  });
+
+  it("detectSource returns skool_referred for referral answers", () => {
+    expect(detectSource({ survey_a3: "My friend John told me" })).toBe("skool_referred");
+    expect(detectSource({ survey_a3: "Referred by Sarah" })).toBe("skool_referred");
+  });
+
+  it("loadSkoolMembers inserts from survey_a1 email", () => {
+    const progress = {
+      processed: {
+        "abc123": {
+          id: "abc123",
+          full_name: "Jane Doe",
+          survey_a1: "Jane@Venue.com",
+          survey_a2: "555-1234",
+          email: "",
+          classification: "active_venue_owner",
+          ghl_contact_id: "ghl_001",
+        },
+      },
+    };
+    const result = loadSkoolMembers(progress);
+    expect(result.inserted).toBe(1);
+
+    const db = openSkoolDb(TEST_DB_PATH);
+    const row = db.prepare("SELECT * FROM contacts WHERE email = ?").get("jane@venue.com");
+    expect(row.skool_member).toBe(1);
+    expect(row.skool_member_id).toBe("abc123");
+    expect(row.skool_classification).toBe("active_venue_owner");
+    expect(row.ghl_contact_id).toBe("ghl_001");
+  });
+
+  it("loadSkoolMembers creates dual rows when survey_a1 and email differ", () => {
+    const progress = {
+      processed: {
+        "def456": {
+          id: "def456",
+          full_name: "Bob Smith",
+          survey_a1: "bob@business.com",
+          email: "bob@skool.com",
+          classification: "aspiring_venue_owner",
+          ghl_contact_id: "ghl_002",
+        },
+      },
+    };
+    const result = loadSkoolMembers(progress);
+    expect(result.inserted).toBe(2);
+    expect(result.dual_email).toBe(1);
+
+    const db = openSkoolDb(TEST_DB_PATH);
+    const row1 = db.prepare("SELECT * FROM contacts WHERE email = ?").get("bob@business.com");
+    const row2 = db.prepare("SELECT * FROM contacts WHERE email = ?").get("bob@skool.com");
+    expect(row1.skool_member_id).toBe("def456");
+    expect(row2.skool_member_id).toBe("def456");
+    expect(row1.ghl_contact_id).toBe("ghl_002");
+    expect(row2.ghl_contact_id).toBe("ghl_002");
+  });
+
+  it("getUntaggedOverlaps returns overlaps with ghl_contact_id", () => {
+    const db = openSkoolDb(TEST_DB_PATH);
+    db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead, skool_member, ghl_contact_id, ghl_tagged)
+                VALUES (?, ?, ?, 1, 1, ?, 0)`).run("overlap@test.com", "test.com", "cold_outreach", "ghl_099");
+    db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead, skool_member, ghl_contact_id, ghl_tagged)
+                VALUES (?, ?, ?, 1, 1, ?, 1)`).run("tagged@test.com", "test.com", "cold_outreach", "ghl_100");
+
+    const untagged = getUntaggedOverlaps();
+    expect(untagged).toHaveLength(1);
+    expect(untagged[0].email).toBe("overlap@test.com");
+    expect(untagged[0].ghl_contact_id).toBe("ghl_099");
+  });
+
+  it("markTagged sets ghl_tagged=1", () => {
+    const db = openSkoolDb(TEST_DB_PATH);
+    db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead, skool_member, ghl_contact_id, ghl_tagged)
+                VALUES (?, ?, ?, 1, 1, ?, 0)`).run("tag-me@test.com", "test.com", "cold_outreach", "ghl_101");
+
+    markTagged("tag-me@test.com");
+
+    const row = db.prepare("SELECT ghl_tagged FROM contacts WHERE email = ?").get("tag-me@test.com");
+    expect(row.ghl_tagged).toBe(1);
   });
 });
