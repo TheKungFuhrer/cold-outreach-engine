@@ -71,6 +71,12 @@ const PREFIXES = new Set([
   "mr.", "mrs.", "ms.", "dr.", "prof.", "sir.", "rev.", "hon.",
 ]);
 
+const SUFFIXES = new Set([
+  "jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v",
+  "phd", "phd.", "md", "md.", "esq", "esq.", "dds", "dds.",
+  "cpa", "cpa.",
+]);
+
 /**
  * Parse a full name string into { first, last }.
  * Handles: "John Smith", "Dr. Jane A. Smith-Jones", single names,
@@ -90,6 +96,11 @@ function parseName(fullName) {
   // Strip honorific prefix
   if (parts.length > 1 && PREFIXES.has(parts[0].toLowerCase())) {
     parts.shift();
+  }
+
+  // Strip suffix
+  if (parts.length > 1 && SUFFIXES.has(parts[parts.length - 1].toLowerCase())) {
+    parts.pop();
   }
 
   if (parts.length === 0) return { first: "", last: "" };
