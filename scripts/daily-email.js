@@ -11,6 +11,8 @@
  * Env: GMAIL_USER, GMAIL_APP_PASSWORD, BRYCE_EMAIL (optional), VPS_URL
  */
 
+require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") });
+
 const nodemailer = require("nodemailer");
 const path = require("path");
 const { loadJson } = require("../shared/progress");
