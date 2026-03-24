@@ -13,11 +13,18 @@
     "score": "node 2-enrichment/score_leads.js",
     "dedup": "node 1-prospecting/dedup/dedup_geolead.js",
     "dashboards": "node scripts/update-dashboards.js",
-    "pipeline": "node pipeline.js"
+    "pipeline": "node pipeline.js",
+    "master": "node scripts/build-master.js",
+    "master:ghl": "node scripts/build-master.js --export ghl",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "csv-parse": "^5.5.0",
     "csv-stringify": "^6.5.0",
     "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.1"
   }
 }
