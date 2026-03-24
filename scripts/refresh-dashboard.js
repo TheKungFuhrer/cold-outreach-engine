@@ -11,10 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const { projectPath, ensureDir } = require("../shared/utils");
 const { loadJson, saveJson } = require("../shared/progress");
-const { readCsv } = require("../shared/csv");
-
 const ARTIFACTS_DIR = projectPath("data", "artifacts");
-const REPORTS_DIR = projectPath("data", "reports");
 
 /**
  * Find the latest file matching a glob-like pattern (simple timestamp sort).
