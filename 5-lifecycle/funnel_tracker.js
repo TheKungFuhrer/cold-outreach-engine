@@ -10,11 +10,10 @@
  */
 
 const { getCampaignStats, listCampaigns } = require("../shared/smartlead");
-const { readCsv, findField } = require("../shared/csv");
+const { readCsv } = require("../shared/csv");
+const { resolveField } = require("../shared/fields");
 const { saveJson } = require("../shared/progress");
 const { projectPath, ensureDir, timestamp } = require("../shared/utils");
-
-const EMAIL_FIELDS = ["email", "Email", "email_address", "one_email", "decision_maker_email"];
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -37,7 +36,7 @@ async function loadSegmentEmails() {
       const { records } = await readCsv(projectPath(filePath));
       const emails = new Set();
       for (const row of records) {
-        const email = (findField(row, EMAIL_FIELDS) || "").trim().toLowerCase();
+        const email = resolveField(row, "email").toLowerCase();
         if (email) emails.add(email);
       }
       segments[segment] = emails;
@@ -82,24 +81,47 @@ async function main() {
   for (const campaign of campaigns) {
     try {
       const stats = await getCampaignStats(campaign.id);
+      // Normalize field names (API returns sent_count, open_count, etc.)
+      const total = parseInt(stats.total_count || stats.total_leads || 0);
+      const sent = parseInt(stats.sent_count || stats.emails_sent || stats.unique_sent_count || 0);
+      const uniqueSent = parseInt(stats.unique_sent_count || sent);
+      const opened = parseInt(stats.open_count || stats.opens || 0);
+      const uniqueOpened = parseInt(stats.unique_open_count || opened);
+      const replied = parseInt(stats.reply_count || stats.replies || 0);
+      const clicked = parseInt(stats.click_count || stats.clicks || 0);
+      const bounced = parseInt(stats.bounce_count || stats.bounces || 0);
+      const interested = parseInt((stats.campaign_lead_stats || {}).interested || 0);
+      const completed = parseInt((stats.campaign_lead_stats || {}).completed || 0);
+      const inProgress = parseInt((stats.campaign_lead_stats || {}).inprogress || 0);
+
       results.push({
         campaign_id: campaign.id,
         name: campaign.name || stats.name || `Campaign ${campaign.id}`,
-        stats,
+        total, sent, uniqueSent, opened, uniqueOpened, replied, clicked, bounced, interested, completed, inProgress,
+        raw: stats,
       });
 
-      console.log(`Campaign: ${campaign.name || campaign.id}`);
-      console.log(`  Total:   ${stats.total_leads || "—"}`);
-      console.log(`  Sent:    ${stats.emails_sent || "—"}`);
-      console.log(`  Opened:  ${stats.opens || "—"}`);
-      console.log(`  Replied: ${stats.replies || "—"}`);
+      console.log(`Campaign: ${stats.name || campaign.name || campaign.id}`);
+      console.log(`  Leads:         ${(stats.campaign_lead_stats || {}).total || total}`);
+      console.log(`  Completed:     ${completed} | In-progress: ${inProgress}`);
+      console.log(`  Interested:    ${interested}`);
+      console.log(`  Emails sent:   ${sent} total (${uniqueSent} unique leads)`);
+      console.log(`  Opens:         ${opened} total (${uniqueOpened} unique)`);
+      console.log(`  Replies:       ${replied}`);
+      console.log(`  Clicks:        ${clicked}`);
+      console.log(`  Bounces:       ${bounced}`);
 
-      // Calculate rates
-      if (stats.emails_sent > 0) {
-        const openRate = ((stats.opens || 0) / stats.emails_sent * 100).toFixed(1);
-        const replyRate = ((stats.replies || 0) / stats.emails_sent * 100).toFixed(1);
-        console.log(`  Open rate:  ${openRate}%`);
-        console.log(`  Reply rate: ${replyRate}%`);
+      // Calculate rates based on unique leads contacted
+      if (uniqueSent > 0) {
+        const openRate = (uniqueOpened / uniqueSent * 100).toFixed(1);
+        const replyRate = (replied / uniqueSent * 100).toFixed(1);
+        const bounceRate = (bounced / uniqueSent * 100).toFixed(1);
+        const interestedRate = (interested / uniqueSent * 100).toFixed(1);
+        console.log(`  --- Rates (per unique lead) ---`);
+        console.log(`  Open rate:       ${openRate}%`);
+        console.log(`  Reply rate:      ${replyRate}%`);
+        console.log(`  Bounce rate:     ${bounceRate}%`);
+        console.log(`  Interested rate: ${interestedRate}%`);
       }
       console.log();
     } catch (err) {

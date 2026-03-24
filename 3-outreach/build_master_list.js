@@ -15,24 +15,12 @@
  */
 
 const fs = require("fs");
-const { readCsv, writeCsv, findField } = require("../shared/csv");
+const { readCsv, writeCsv } = require("../shared/csv");
+const { resolveField, normalizeRow } = require("../shared/fields");
 const { loadJsonl } = require("../shared/progress");
 const { projectPath, ensureDir } = require("../shared/utils");
 
 const OUTPUT_PATH = projectPath("data", "upload", "master_enriched_emails.csv");
-
-const EMAIL_FIELDS = [
-  "email", "Email", "email_address", "one_email", "decision_maker_email",
-];
-const NAME_FIELDS = [
-  "company_name", "company", "business_name", "venue_name", "Company", "Company Name",
-];
-const DOMAIN_FIELDS = [
-  "domain", "company_domain", "website", "Website", "company_url", "company_website",
-];
-const PHONE_FIELDS = ["phone_number", "Phone", "phone"];
-const FIRST_NAME_FIELDS = ["first_name", "First Name", "decision_maker_name"];
-const LAST_NAME_FIELDS = ["last_name", "Last Name"];
 
 function safeReadCsv(filepath) {
   try {
@@ -79,24 +67,16 @@ function extractEmailsFromAmfRow(row) {
 }
 
 function extractEmailFromStandardRow(row) {
-  const email = findField(row, EMAIL_FIELDS);
-  if (!email) return null;
-
-  let firstName = findField(row, FIRST_NAME_FIELDS) || "";
-  let lastName = findField(row, LAST_NAME_FIELDS) || "";
-  if (firstName && !lastName && firstName.includes(" ")) {
-    const parts = firstName.split(" ");
-    firstName = parts[0];
-    lastName = parts.slice(1).join(" ");
-  }
+  const n = normalizeRow(row);
+  if (!n.email) return null;
 
   return {
-    email: email.trim().toLowerCase(),
-    company_name: findField(row, NAME_FIELDS) || "",
-    domain: findField(row, DOMAIN_FIELDS) || "",
-    phone_number: findField(row, PHONE_FIELDS) || "",
-    first_name: firstName,
-    last_name: lastName,
+    email: n.email,
+    company_name: n.companyName,
+    domain: n.website,
+    phone_number: n.phone,
+    first_name: n.firstName,
+    last_name: n.lastName,
   };
 }
 

@@ -20,6 +20,9 @@ import aiohttp
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "shared"))
+from fields import resolve_field
+
 load_dotenv(PROJECT_ROOT / ".env")
 
 API_KEY = os.getenv("ANYMAILFINDER_API_KEY")
@@ -43,13 +46,13 @@ def load_venues():
     with open(VENUES_CSV, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            domain = (row.get("website") or "").strip()
-            if domain:
-                domain = domain.replace("https://", "").replace("http://", "").split("/")[0]
+            raw_website = resolve_field(row, "website")
+            if raw_website:
+                domain = raw_website.replace("https://", "").replace("http://", "").split("/")[0]
                 venues.append({
-                    "venue_name": row.get("company_name", ""),
+                    "venue_name": resolve_field(row, "companyName"),
                     "domain": domain,
-                    "original_email": row.get("email", ""),
+                    "original_email": resolve_field(row, "email"),
                 })
     return venues
 

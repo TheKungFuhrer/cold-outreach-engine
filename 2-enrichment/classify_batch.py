@@ -18,6 +18,8 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "shared"))
+from fields import resolve_field
 load_dotenv(PROJECT_ROOT / ".env")
 
 API_KEY = os.getenv("ANTHROPIC_API_KEY_BATCH")
@@ -55,9 +57,9 @@ NOT a venue:
 
 
 def build_request(lead, index):
-    name = lead.get("company_name") or lead.get("company") or lead.get("Company") or lead.get("name") or ""
-    email = lead.get("email") or lead.get("Email") or ""
-    website = lead.get("website") or lead.get("Website") or lead.get("url") or lead.get("company_domain") or lead.get("company_website") or ""
+    name = resolve_field(lead, "companyName")
+    email = resolve_field(lead, "email")
+    website = resolve_field(lead, "website")
 
     user_msg = f"Business name: {name}\nEmail: {email}"
     if website:

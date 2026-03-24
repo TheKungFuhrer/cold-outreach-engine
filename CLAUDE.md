@@ -68,14 +68,63 @@ python 2-enrichment/anymailfinder_contacts.py
 python 2-enrichment/anymailfinder_bulk.py
 ```
 
-### 3. Outreach — Upload and campaign management (TODO: next session)
+### 3. Outreach — Upload and campaign management
 
 ```bash
-# Upload leads to SmartLead (REST API)
-node 3-outreach/upload_leads.js
+# Upload leads to SmartLead (REST API, 400/batch, resumable)
+node 3-outreach/upload_leads.js --input <csv> --campaign-id <id> [--dry-run]
 
-# Assign leads to campaigns
-node 3-outreach/assign_campaigns.js --campaign-id <id>
+# Assign leads to campaigns (optional phone segmentation)
+node 3-outreach/assign_campaigns.js --campaign-id <id> [--segment mobile|voip|landline] [--limit N]
+
+# SmartLead email verification (NOTE: API returns 404, must be done manually in SmartLead UI)
+# node 3-outreach/verify_emails.js --campaign-id <id>
+
+# SmartLead Prospect find-emails (domain contact discovery, 5 req/s)
+node 3-outreach/prospect_emails.js --input <csv> [--limit N]
+
+# Build master enriched email list from all sources
+node 3-outreach/build_master_list.js
+```
+
+### 4. Analytics & Reporting
+
+```bash
+# Pipeline funnel metrics and conversion rates
+node 4-analytics/funnel_report.js [--json]
+
+# API cost estimates (Haiku/Sonnet/Numverify)
+node 4-analytics/cost_report.js
+
+# SmartLead campaign performance (opens, replies, bounces)
+node 4-analytics/campaign_stats.js
+
+# Email account health audit
+node 4-analytics/mailbox_audit.js
+
+# Configure new SmartLead email accounts
+node 4-analytics/configure_new_mailboxes.js
+```
+
+### 5. Lifecycle Tracking
+
+```bash
+# Maps SmartLead engagement data to lead segments
+node 5-lifecycle/funnel_tracker.js --campaign-id <id>
+
+# Cost-per-acquisition tracker
+node 5-lifecycle/cpa_tracker.js [--subscription-cost N]
+```
+
+### 6. Daily Automated Prospecting
+
+```bash
+# Daily cron job — rotates search terms and US regions, deduplicates, classifies, uploads
+node scripts/daily-prospect.js [--dry-run] [--limit N] [--force]
+
+# Config: scripts/daily-prospect-config.json
+# Data: data/daily-prospects/
+# Cron: 0 9 * * * (9 AM daily)
 ```
 
 ## Quick Reference: GeoLead Pipeline (new leads)
@@ -130,21 +179,39 @@ All under `data/` (gitignored — no PII in repo):
 2-enrichment/           Filtering, AI classification, validation
   prefilter.js            Zero-cost keyword filtering
   classify_batch.py       Haiku batch classification
+  classify_non_venues.py  Non-venue sub-classification (services/adjacent/irrelevant)
   escalate_sonnet.py      Sonnet ambiguous escalation
   validate_phones.py      Numverify phone validation
   export_clean.js         Final venue merge
-  anymailfinder_*.py      AnyMailFinder contact discovery
-3-outreach/             Campaign management (TODO)
-4-analytics/            Reporting (TODO)
-5-lifecycle/            Funnel tracking (TODO)
+  anymailfinder_*.py      AnyMailFinder contact discovery (individual + bulk)
+  anymailfinder_bulk_*.js AnyMailFinder bulk submit/status/download (JS)
+3-outreach/             Campaign management
+  upload_leads.js         SmartLead REST upload (400/batch, resumable)
+  assign_campaigns.js     Campaign assignment with phone segmentation
+  verify_emails.js        SmartLead email verification trigger
+  prospect_emails.js      SmartLead Prospect find-emails discovery
+  build_master_list.js    Master enriched email consolidation
+4-analytics/            Reporting
+  funnel_report.js        Pipeline stage metrics and conversion rates
+  cost_report.js          API cost estimates
+  campaign_stats.js       SmartLead campaign performance
+  mailbox_audit.js        Email account health audit
+  configure_new_mailboxes.js  New account setup
+5-lifecycle/            Funnel tracking
+  funnel_tracker.js       Engagement-to-segment mapping
+  cpa_tracker.js          Cost-per-acquisition analysis
+scripts/                Automation
+  daily-prospect.js       Daily automated prospecting cron job
+  daily-prospect-config.json  Cron configuration
+  batch-helper.py         Async Haiku batch helper
+  update-dashboards.js    HTML dashboard data refresh
 shared/                 Reusable utilities
   env.js                  Environment variable loading
   csv.js                  CSV read/write/stream helpers
   dedup.js                Domain normalization and dedup
   progress.js             Checkpoint/resume helpers
   utils.js                Project paths, timestamps, mkdir
-  smartlead.js            SmartLead REST API client (stub)
-cron/                   Automation scripts
+  smartlead.js            SmartLead REST API client with rate limiter
 ```
 
 ## Architecture Notes
@@ -172,10 +239,26 @@ smartlead prospect search --query <query>
 # Max 400 leads per upload request
 ```
 
-## Current State (as of 2026-03-22)
+## Current State (as of 2026-03-23)
 
-- **Original pipeline:** 17,901 scraped leads → 14,052 after pre-filter → 8,958 confirmed venues + 5,018 non-venues + 76 ambiguous
-- **Phone validation:** All 8,958 venues validated (mobile/voip/landline segmentation)
-- **AnyMail enrichment:** 55,984 additional emails discovered across 8,004 venues
-- **GeoLead dedup:** 135,378 raw records → 24,897 net-new leads (after dedup against 24,501 existing domains)
-- **Next steps:** Run net-new leads through pre-filter → classify → validate → upload to SmartLead
+### Lead Pipeline Complete
+- **Original SmartLead batch:** 17,901 scraped → 14,052 after prefilter → 8,958 venues + 5,018 non-venues + 76 ambiguous
+- **GeoLead batch 1:** 146,009 raw records → 26,539 net-new after dedup → 14,851 venues + 10,295 non-venues
+- **GeoLead batch 2 (manual inbox):** 5,570 records across 32 CSVs → 2,661 net-new domains processed via AnyMailFinder bulk
+- **Total classified venues:** ~24,044 across all batches
+- **Phone validation:** All venues validated (mobile/landline/voip segmentation)
+
+### Email Enrichment Complete
+- **AnyMailFinder original:** 55,984 additional emails across 8,004 venues
+- **AnyMailFinder GeoLead bulk:** 18,594 net-new emails from GeoLead + inbox batches
+- **Master email list:** 112,045 unique emails (deduplicated across all sources)
+
+### SmartLead Campaigns
+- **Venues_AllSources_Mar26** (ID: 3071191) — All confirmed venue leads
+- **NonVenues_AllSources_Mar26** (ID: 3071192) — Non-venue leads for exclusion
+- **VenueOwners_US_Sep25** (ID: 2434779) — Original campaign with engagement data
+
+### Automation
+- **Daily prospecting cron:** Built (`scripts/daily-prospect.js`), not yet activated
+- **Pipeline orchestrator:** `pipeline.js` chains all steps with --start-at, --skip, --dry-run
+- **HTML dashboards:** 5 views auto-refreshed by `scripts/update-dashboards.js`

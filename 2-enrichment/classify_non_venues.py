@@ -23,6 +23,9 @@ from pathlib import Path
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "shared"))
+from fields import resolve_field
+
 PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -76,25 +79,12 @@ def normalize_domain(raw):
 
 def extract_domain(row):
     """Extract normalized domain from a row, trying multiple field names."""
-    raw = (
-        row.get("website")
-        or row.get("Website")
-        or row.get("company_website")
-        or row.get("company_domain")
-        or row.get("url")
-        or ""
-    )
+    raw = resolve_field(row, "website")
     domain = normalize_domain(raw)
     if domain:
         return domain
     # Fallback: extract domain from email
-    email = (
-        row.get("email")
-        or row.get("Email")
-        or row.get("one_email")
-        or row.get("decision_maker_email")
-        or ""
-    )
+    email = resolve_field(row, "email")
     if "@" in email:
         return email.split("@")[1].strip().lower()
     return ""

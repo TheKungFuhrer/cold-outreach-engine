@@ -1,0 +1,76 @@
+{
+  "search_term_banks": {
+    "core_venue": [
+      "event venue",
+      "wedding venue",
+      "banquet hall",
+      "reception hall",
+      "event space",
+      "party venue",
+      "event center",
+      "wedding hall"
+    ],
+    "venue_types": [
+      "wedding barn",
+      "country club",
+      "conference center",
+      "rooftop venue",
+      "garden venue",
+      "estate venue",
+      "ballroom",
+      "function room",
+      "celebration hall",
+      "lodge venue",
+      "winery wedding",
+      "vineyard venue",
+      "mansion venue",
+      "loft event space"
+    ],
+    "modifiers": [
+      "private event space",
+      "corporate event hall",
+      "outdoor wedding venue",
+      "indoor event venue",
+      "rustic wedding venue",
+      "luxury event space",
+      "affordable wedding venue",
+      "small wedding venue",
+      "large event hall",
+      "waterfront venue",
+      "historic venue",
+      "boutique wedding venue"
+    ]
+  },
+  "terms_per_day": 3,
+  "regions": [
+    {
+      "name": "Northeast",
+      "states": ["NY", "NJ", "PA", "CT", "MA", "RI", "NH", "VT", "ME"]
+    },
+    {
+      "name": "Southeast",
+      "states": ["GA", "FL", "NC", "SC", "VA", "TN", "AL", "MS", "LA", "AR", "KY", "WV"]
+    },
+    {
+      "name": "Midwest",
+      "states": ["IL", "OH", "MI", "IN", "WI", "MN", "IA", "MO", "KS", "NE", "SD", "ND"]
+    },
+    {
+      "name": "Southwest",
+      "states": ["TX", "AZ", "NM", "OK", "CO"]
+    },
+    {
+      "name": "West",
+      "states": ["CA", "WA", "OR", "NV", "UT", "ID", "MT", "WY", "HI", "AK"]
+    }
+  ],
+  "daily_lead_target": 100,
+  "daily_search_limit": 100,
+  "sync_classify_threshold": 100,
+  "campaign_ids": {
+    "venues": 3071191,
+    "non_venues": 3071192
+  },
+  "dedup_campaign_ids": [3071191, 3071192],
+  "cron_schedule": "0 9 * * *"
+}

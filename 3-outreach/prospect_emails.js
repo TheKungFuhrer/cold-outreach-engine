@@ -13,16 +13,10 @@
  */
 
 const { execSync } = require("child_process");
-const { readCsv, writeCsv, findField } = require("../shared/csv");
+const { readCsv, writeCsv } = require("../shared/csv");
+const { resolveField } = require("../shared/fields");
 const { loadJsonl, appendJsonl } = require("../shared/progress");
 const { projectPath, ensureDir, timestamp } = require("../shared/utils");
-
-const DOMAIN_FIELDS = [
-  "website", "Website", "company_url", "url", "company_website", "company_domain",
-];
-const NAME_FIELDS = [
-  "company_name", "company", "business_name", "Company", "Company Name",
-];
 
 const CHECKPOINT_PATH = projectPath("data", "enriched", ".prospect_progress.jsonl");
 const OUTPUT_DIR = projectPath("data", "enriched");
@@ -101,7 +95,7 @@ async function main() {
   // Build set of domains to process
   const domainMap = new Map(); // domain → record
   for (const row of records) {
-    const rawDomain = findField(row, DOMAIN_FIELDS);
+    const rawDomain = resolveField(row, "website");
     const domain = extractDomain(rawDomain);
     if (domain && !domainMap.has(domain)) {
       domainMap.set(domain, row);
@@ -133,12 +127,12 @@ async function main() {
 
   for (let i = 0; i < toProcess.length; i++) {
     const domain = toProcess[i];
-    const companyName = findField(domainMap.get(domain), NAME_FIELDS) || "";
+    const companyName = resolveField(domainMap.get(domain), "companyName");
     const result = findEmailsForDomain(domain, companyName);
 
     const record = {
       domain,
-      company_name: findField(domainMap.get(domain), NAME_FIELDS) || "",
+      company_name: companyName,
       emails: result.emails,
       email_count: result.emails.length,
       error: result.error,

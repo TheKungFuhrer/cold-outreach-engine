@@ -10,21 +10,14 @@
  *   node 3-outreach/upload_leads.js --input data/final/clean_venues.csv --campaign-id 12345 --dry-run
  */
 
-const { readCsv, writeCsv, findField } = require("../shared/csv");
+const { readCsv, writeCsv } = require("../shared/csv");
+const { resolveField, normalizeRow } = require("../shared/fields");
 const { uploadLeads, chunkArray } = require("../shared/smartlead");
 const { loadJsonl, appendJsonl } = require("../shared/progress");
 const { projectPath, ensureDir, timestamp } = require("../shared/utils");
 
 const CHECKPOINT_PATH = projectPath("data", "reports", ".upload_progress.jsonl");
 const FAILURES_PATH = projectPath("data", "reports", "upload_failures.csv");
-
-const EMAIL_FIELDS = ["email", "Email", "email_address", "one_email", "decision_maker_email"];
-const FIRST_NAME_FIELDS = ["first_name", "First Name", "decision_maker_name"];
-const LAST_NAME_FIELDS = ["last_name", "Last Name"];
-const COMPANY_FIELDS = ["company_name", "company", "business_name", "Company", "Company Name"];
-const PHONE_FIELDS = ["phone_number", "Phone", "phone"];
-const WEBSITE_FIELDS = ["website", "Website", "company_url", "url", "company_website", "company_domain"];
-const LOCATION_FIELDS = ["location", "company_location", "Location", "city", "state"];
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -38,26 +31,17 @@ function parseArgs() {
 }
 
 function mapLeadToSmartLead(row) {
-  const email = findField(row, EMAIL_FIELDS);
-  if (!email) return null;
-
-  // Split decision_maker_name into first/last if dedicated fields are empty
-  let firstName = findField(row, FIRST_NAME_FIELDS) || "";
-  let lastName = findField(row, LAST_NAME_FIELDS) || "";
-  if (firstName && !lastName && firstName.includes(" ")) {
-    const parts = firstName.split(" ");
-    firstName = parts[0];
-    lastName = parts.slice(1).join(" ");
-  }
+  const n = normalizeRow(row);
+  if (!n.email) return null;
 
   const lead = {
-    email: email.trim().toLowerCase(),
-    first_name: firstName,
-    last_name: lastName,
-    company_name: findField(row, COMPANY_FIELDS) || "",
-    phone_number: findField(row, PHONE_FIELDS) || "",
-    website: findField(row, WEBSITE_FIELDS) || "",
-    location: findField(row, LOCATION_FIELDS) || "",
+    email: n.email,
+    first_name: n.firstName,
+    last_name: n.lastName,
+    company_name: n.companyName,
+    phone_number: n.phone,
+    website: n.website,
+    location: n.location,
   };
 
   // Custom fields for segmentation

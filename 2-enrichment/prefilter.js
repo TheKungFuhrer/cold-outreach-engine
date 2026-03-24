@@ -12,7 +12,7 @@
 const fs = require("fs");
 const path = require("path");
 const { projectPath, ensureDir } = require("../shared/utils");
-const { readCsv, writeCsv, findField } = require("../shared/csv");
+const { readCsv, writeCsv } = require("../shared/csv");
 
 const DATA_RAW = projectPath("data", "raw");
 const DATA_FILTERED = projectPath("data", "filtered");
@@ -119,14 +119,8 @@ const RULES = [
   },
 ];
 
-// Fields to check for pattern matching
-const NAME_FIELDS = [
-  "company_name", "company", "business_name", "first_name",
-  "last_name", "name", "Company", "Company Name",
-];
-const EMAIL_FIELDS = ["email", "Email", "email_address", "one_email", "decision_maker_email"];
-const WEBSITE_FIELDS = ["website", "Website", "company_url", "url", "company_website", "company_domain"];
-const CATEGORY_FIELDS = ["category", "lead_category", "Category"];
+// Field resolution via shared registry
+const { FIELDS, resolveField } = require("../shared/fields");
 
 // Social media URLs — flagged but still passed through
 const SOCIAL_MEDIA_PATTERNS = [
@@ -185,7 +179,7 @@ function main() {
     }
 
     // Skip already opted-out leads by category
-    const category = findField(row, CATEGORY_FIELDS).toLowerCase();
+    const category = resolveField(row, "category").toLowerCase();
     if (SKIP_CATEGORIES.some((sc) => category.includes(sc))) {
       excluded.push({ ...row, _exclusion_reason: "Already opted out: " + category });
       summary.by_category["Already Opted Out"] =
@@ -193,8 +187,8 @@ function main() {
       continue;
     }
 
-    const name = findField(row, NAME_FIELDS);
-    const email = findField(row, EMAIL_FIELDS);
+    const name = resolveField(row, "companyName");
+    const email = resolveField(row, "email");
     const textToCheck = `${name} ${email}`;
 
     let matched = false;
@@ -212,7 +206,7 @@ function main() {
     }
 
     if (!matched) {
-      const website = findField(row, WEBSITE_FIELDS).trim();
+      const website = resolveField(row, "website");
       if (!website) {
         excluded.push({ ...row, _exclusion_reason: "No Website" });
         summary.by_category["No Website"] =
@@ -263,6 +257,6 @@ function main() {
 }
 
 // Export RULES for reuse by other scripts
-module.exports = { RULES, NAME_FIELDS, EMAIL_FIELDS, WEBSITE_FIELDS };
+module.exports = { RULES, FIELDS };
 
-main();
+if (require.main === module) main();

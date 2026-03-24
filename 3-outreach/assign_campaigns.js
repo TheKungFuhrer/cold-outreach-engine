@@ -11,12 +11,11 @@
  *   node 3-outreach/assign_campaigns.js --campaign-id 12345 --segment mobile --limit 500 --dry-run
  */
 
-const { readCsv, findField } = require("../shared/csv");
+const { readCsv } = require("../shared/csv");
+const { resolveField } = require("../shared/fields");
 const { addLeadsToCampaign, chunkArray } = require("../shared/smartlead");
 const { loadJsonl, appendJsonl } = require("../shared/progress");
 const { projectPath, ensureDir } = require("../shared/utils");
-
-const EMAIL_FIELDS = ["email", "Email", "email_address", "one_email", "decision_maker_email"];
 
 const SEGMENT_PATHS = {
   mobile: "data/phone_validated/mobile.csv",
@@ -63,7 +62,7 @@ async function main() {
   const emails = [];
   const seen = new Set();
   for (const row of records) {
-    const email = (findField(row, EMAIL_FIELDS) || "").trim().toLowerCase();
+    const email = resolveField(row, "email").toLowerCase();
     if (email && !seen.has(email)) {
       seen.add(email);
       emails.push(email);
