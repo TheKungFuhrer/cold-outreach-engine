@@ -3,13 +3,10 @@
  *
  * Provides functions for loading cold leads into the shared identity DB,
  * checking for Skool member overlaps, and marking suppressed emails.
- *
- * Uses ESM syntax so vitest resolves identity-db.js through the same module
- * record as the test file's imports, ensuring the singleton _db is shared.
  */
 
-import { getDb, normalizeEmail } from "./identity-db.js";
-import { extractDomainFromEmail, normalizeDomain } from "./dedup.js";
+const { openDb, getDb, closeDb, normalizeEmail } = require("./identity-db");
+const { extractDomainFromEmail, normalizeDomain } = require("./dedup");
 
 /**
  * Bulk-upsert cold leads into the identity DB.
@@ -17,7 +14,7 @@ import { extractDomainFromEmail, normalizeDomain } from "./dedup.js";
  * @param {object[]} records - Array of lead objects (must have email field)
  * @returns {{ upserted: number, skipped: number }}
  */
-export function loadColdLeads(records) {
+function loadColdLeads(records) {
   const db = getDb();
   const now = new Date().toISOString();
 
@@ -68,7 +65,7 @@ export function loadColdLeads(records) {
   return { upserted, skipped };
 }
 
-export function checkOverlaps(emails) {
+function checkOverlaps(emails) {
   const db = getDb();
   const stmt = db.prepare("SELECT email FROM contacts WHERE email = ? AND skool_member = 1");
 
@@ -82,7 +79,7 @@ export function checkOverlaps(emails) {
   return overlaps;
 }
 
-export function markSuppressed(emails) {
+function markSuppressed(emails) {
   const db = getDb();
   const stmt = db.prepare("UPDATE contacts SET smartlead_suppressed = 1 WHERE email = ?");
   const run = db.transaction((batch) => {
@@ -93,7 +90,7 @@ export function markSuppressed(emails) {
   run(emails);
 }
 
-export function getStats() {
+function getStats() {
   const db = getDb();
   const total = db.prepare("SELECT COUNT(*) as c FROM contacts").get().c;
   const cold = db.prepare("SELECT COUNT(*) as c FROM contacts WHERE cold_outreach_lead = 1").get().c;
@@ -109,3 +106,5 @@ export function getStats() {
 
   return { total, cold_outreach: cold, skool, overlaps, suppressed, by_source };
 }
+
+module.exports = { openDb, closeDb, loadColdLeads, checkOverlaps, markSuppressed, getStats };

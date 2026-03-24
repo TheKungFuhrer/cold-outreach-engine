@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { openDb, closeDb, SCHEMA_VERSION } from "./identity-db.js";
-import { loadColdLeads, checkOverlaps, markSuppressed, getStats } from "./identity.js";
+import { openDb as openAdapterDb, closeDb as closeAdapterDb, loadColdLeads, checkOverlaps, markSuppressed, getStats } from "./identity.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test_identity.db");
@@ -51,11 +51,11 @@ describe("identity-db", () => {
 
 describe("cold-outreach identity adapter", () => {
   beforeEach(() => {
-    openDb(TEST_DB_PATH);
+    openAdapterDb(TEST_DB_PATH);
   });
 
   afterEach(() => {
-    closeDb();
+    closeAdapterDb();
     for (const ext of ["", "-wal", "-shm"]) {
       try { fs.unlinkSync(TEST_DB_PATH + ext); } catch {}
     }
@@ -77,7 +77,7 @@ describe("cold-outreach identity adapter", () => {
   });
 
   it("loadColdLeads upserts without overwriting skool data", () => {
-    const db = openDb(TEST_DB_PATH);
+    const db = openAdapterDb(TEST_DB_PATH);
     db.prepare(`INSERT INTO contacts (email, domain, source, skool_member, skool_member_id, first_seen_skool)
                 VALUES (?, ?, ?, 1, ?, ?)`).run("alice@example.com", "example.com", "skool_organic", "abc123", "2026-01-01T00:00:00Z");
 
@@ -92,7 +92,7 @@ describe("cold-outreach identity adapter", () => {
   });
 
   it("checkOverlaps returns emails that are skool members", () => {
-    const db = openDb(TEST_DB_PATH);
+    const db = openAdapterDb(TEST_DB_PATH);
     db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead, skool_member)
                 VALUES (?, ?, ?, 1, 1)`).run("overlap@test.com", "test.com", "cold_outreach");
     db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead)
@@ -103,7 +103,7 @@ describe("cold-outreach identity adapter", () => {
   });
 
   it("markSuppressed sets smartlead_suppressed=1", () => {
-    const db = openDb(TEST_DB_PATH);
+    const db = openAdapterDb(TEST_DB_PATH);
     db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead)
                 VALUES (?, ?, ?, 1)`).run("test@test.com", "test.com", "cold_outreach");
 
