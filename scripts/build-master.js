@@ -14,7 +14,8 @@
 
 const fs = require("fs");
 const path = require("path");
-const { readCsv, writeCsv } = require("../shared/csv");
+const csv = require("../shared/csv");
+const { readCsv } = csv;
 const { normalizeRow, resolveField, parseLocationFull, parseName } = require("../shared/fields");
 const { normalizeDomain } = require("../shared/dedup");
 const { projectPath } = require("../shared/utils");
@@ -455,7 +456,7 @@ function writeMasterCsv(records) {
     }
     return out;
   });
-  writeCsv(outputPath, rows, MASTER_COLUMNS);
+  csv.writeCsv(outputPath, rows, MASTER_COLUMNS);
   return outputPath;
 }
 
@@ -522,7 +523,7 @@ function exportGhlContacts(records, domainEmails) {
     };
   });
   const outputPath = projectPath("data", "master", "ghl_contacts.csv");
-  writeCsv(outputPath, rows, columns);
+  csv.writeCsv(outputPath, rows, columns);
   return outputPath;
 }
 
@@ -551,7 +552,7 @@ function exportGhlCompanies(records) {
     });
   }
   const outputPath = projectPath("data", "master", "ghl_companies.csv");
-  writeCsv(outputPath, rows, columns);
+  csv.writeCsv(outputPath, rows, columns);
   return outputPath;
 }
 
@@ -573,7 +574,7 @@ function exportGhlOpportunities(records) {
     "Status": "open",
   }));
   const outputPath = projectPath("data", "master", "ghl_opportunities.csv");
-  writeCsv(outputPath, rows, columns);
+  csv.writeCsv(outputPath, rows, columns);
   return outputPath;
 }
 
