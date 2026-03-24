@@ -15,6 +15,8 @@ A single Node.js script (`scripts/build-master.js`) that reads all source CSVs, 
 
 In-memory merge using existing shared modules (`shared/csv.js`, `shared/fields.js`, `shared/dedup.js`). All data (~112K records) fits comfortably in memory. Full rebuild each run (~10-15 seconds). Incremental by nature — re-reads all sources, dedup key prevents duplicates.
 
+**Relationship to existing scripts:** `3-outreach/build_master_list.js` does email-level dedup and produces `data/upload/master_enriched_emails.csv`. This new script supersedes that — it consumes the same sources but produces a richer, domain-keyed master with all pipeline metadata. The old script remains functional but `build-master.js` is the canonical source of truth going forward.
+
 ## Data Model
 
 ### Master Record Schema
@@ -96,7 +98,7 @@ Options:
 ### Phase 1: Ingest & Merge
 
 1. Read all source CSVs using `shared/csv.js`
-2. Normalize each row via `shared/fields.js` → canonical field names
+2. Normalize common fields via `shared/fields.js:normalizeRow()` → canonical names for email, firstName, lastName, companyName, phone, website, city, state, location, source. **Note:** `normalizeRow()` only returns these common fields — pipeline-specific fields (`is_venue`, `confidence`, `reasoning`, `phone_valid`, `line_type`, `carrier`, `score`) must be read directly from the raw CSV row and carried alongside the normalized fields.
 3. For each row, compute `normalizeDomain(website)` → domain key
 4. Insert into `Map<domain, Map<email, record>>`, merging fields per priority rules
 5. AnyMailFinder rows: look up existing domain entry, create new email rows inheriting company-level fields
@@ -115,7 +117,10 @@ Flatten the nested maps into a sorted array (by domain, then email).
 ### Phase 3: Export
 
 - Write `data/master/leads_master.csv` (always)
-- If `--export ghl`: generate the three GHL CSVs, applying `--min-score` and `--min-stage` filters
+- If `--export ghl`:
+  - Build a domain→emails lookup for `Additional Emails` aggregation (group all emails by domain, then for each contact row, semicolon-join the other emails for that domain)
+  - Apply `--min-score` and `--min-stage` filters using a stage-to-rank mapping: `raw=0, filtered=1, classified=2, validated=3, enriched=4, uploaded=5, in_campaign=6`
+  - Generate the three GHL CSVs
 
 ### Console Output
 
@@ -180,7 +185,7 @@ One row per contact. Filtered by `--min-score` and `--min-stage` at export time.
 
 ### Location Parser
 
-Best-effort regex on `location_raw`:
+The existing `shared/fields.js:parseLocation()` returns `{ city, state }` but does not extract zip codes or handle full state names. This script needs an extended parser (`parseLocationFull()`) added to `shared/fields.js` that returns `{ city, state, zip }`:
 
 ```
 "Austin, TX"          → city=Austin, state=TX, zip=
@@ -189,25 +194,29 @@ Best-effort regex on `location_raw`:
 "Miami FL 33101"      → city=Miami, state=FL, zip=33101
 ```
 
-- Lookup of full state names → two-letter abbreviations
+Implementation requirements:
+- Add a full-state-name-to-abbreviation lookup object (50 states + DC + territories)
+- Regex for 5-digit zip codes (optionally with +4 extension, but store only 5-digit)
 - Handle edge cases: extra whitespace, trailing commas, "USA" suffix
 - If no match, leave `city`/`state`/`zip` blank, keep `location_raw` intact
+- The existing `parseLocation()` is left unchanged to avoid breaking other scripts
 
 ### Name Splitter
 
-For `decision_maker_name` from GeoLead data:
+The existing `shared/fields.js:parseName()` handles prefix stripping and first/last splitting. For single-token names, the existing behavior is `"Smith" → first=Smith, last=""`. This script follows that convention.
+
+Enhancements needed for `parseName()`:
+- Add suffix stripping: Jr., Sr., III, PhD, etc. (not currently implemented)
 
 ```
 "John Smith"           → first=John, last=Smith
 "Dr. Jane Doe"         → first=Jane, last=Doe (strip prefix)
 "Mary Jane Watson"     → first=Mary Jane, last=Watson (last token = last name)
-"Smith"                → first=, last=Smith
+"Smith"                → first=Smith, last= (existing behavior, kept as-is)
 ""                     → first=, last=
+"John Smith Jr."       → first=John, last=Smith (strip suffix)
 ```
 
-- Strip common prefixes: Dr., Mr., Mrs., Ms., Rev., Prof.
-- Strip common suffixes: Jr., Sr., III, PhD, etc.
-- Last whitespace-delimited token = last name, everything before = first name
 - If SmartLead already has `first_name`/`last_name` populated, don't overwrite with parsed values
 
 ## Data Sources Consumed
@@ -216,14 +225,14 @@ For `decision_maker_name` from GeoLead data:
 |--------|----------|---------|-----------------|
 | SmartLead raw | `data/raw/campaign_*.csv` | ~17,901 | Base contact + engagement metrics |
 | GeoLead enriched | `data/enriched/geolead_net_new.csv` | ~26,539 | Decision maker, source query, lat/long |
-| Classified venues | `data/classified/venues.csv` | ~24,015 | is_venue, confidence, reasoning |
-| Classified non-venues | `data/classified/non_venues.csv` | ~5,018 | is_venue=false |
+| Classified venues | `data/classified/venues.csv` + `data/classified_geolead/venues.csv` | ~23,809 combined (8,958 original + 14,851 GeoLead) | is_venue, confidence, reasoning |
+| Classified non-venues | `data/classified/non_venues.csv` + `data/classified_geolead/non_venues.csv` | ~15,313 combined | is_venue=false |
 | Phone validated | `data/phone_validated/*.csv` | ~25,408 | phone_type, carrier |
-| Verified/escalated | `data/verified/*.csv` | ~524 | Upgraded classifications |
+| Verified/escalated | `data/verified/*.csv` + `data/verified_geolead/*.csv` | ~524 | Upgraded classifications |
 | AnyMailFinder original | `data/anymailfinder/additional_contacts.csv` | ~8,889 | Additional emails per domain |
 | AnyMailFinder GeoLead | `data/anymailfinder/geolead_additional_contacts.csv` | ~44,000 | Additional emails per domain |
 | Master email list | `data/upload/master_enriched_emails.csv` | ~112,045 | in_smartlead flag |
-| Scored venues | `data/scored/scored_venues_*.csv` (most recent) | ~23,000 | score (0-100) |
+| Scored venues | `data/scored/scored_venues_*.csv` (most recent) | ~23,000 | score (0-100). **Note:** `data/scored/` may not exist yet if the lead scoring module hasn't been run. The script handles this gracefully — missing scored data means all leads get null score. |
 
 ## Output Files
 
