@@ -80,6 +80,7 @@ def submit_batch(requests):
     print(f"Submitting batch of {len(requests)} requests...")
     batch = client.messages.batches.create(requests=requests)
     print(f"Batch ID: {batch.id} | Status: {batch.processing_status}")
+    print(f"BATCH_ID:{batch.id}", flush=True)
     return batch
 
 

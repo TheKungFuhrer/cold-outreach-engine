@@ -235,7 +235,9 @@ function readStepOutput(outputPath) {
  */
 function formatStatus(masterMap, runState) {
   const lines = [];
-  lines.push("=== Pipeline Status ===\n");
+  let total = 0;
+  for (const [, emailMap] of masterMap) total += emailMap.size;
+  lines.push(`Pipeline Status (${total.toLocaleString()} total leads)`);
 
   // Count leads per stage
   const stageCounts = {};
