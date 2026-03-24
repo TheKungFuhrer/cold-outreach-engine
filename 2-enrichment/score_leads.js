@@ -268,7 +268,7 @@ async function main() {
     const name = resolveField(r, "companyName");
     const loc = parseLocation(resolveField(r, "location"));
     const locStr = [loc.city, loc.state].filter(Boolean).join(", ");
-    console.log(`  ${i + 1}. [${r.score}] ${name}${locStr ? ` — ${locStr}` : ""}`);
+    console.log(`  ${i + 1}. ${name} (${locStr || "Unknown"}) — ${r.score}`);
   }
 }
 

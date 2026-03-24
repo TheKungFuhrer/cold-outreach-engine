@@ -86,7 +86,14 @@ function isChain(name) {
     if (re.test(lower)) return true;
   }
 
-  // Check franchise patterns
+  // Check "a [ChainName] property/hotel/resort" pattern
+  for (const chain of CHAIN_BLOCKLIST) {
+    const escaped = chain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\ba\\s+${escaped}\\s+(property|hotel|resort)\\b`, 'i');
+    if (re.test(lower)) return true;
+  }
+
+  // Check generic franchise patterns (location numbering)
   for (const pattern of CHAIN_PATTERNS) {
     if (pattern.test(name)) return true;
   }
