@@ -428,11 +428,52 @@ function getLeadCategories() {
 }
 
 // ---------------------------------------------------------------------------
+// Lead-level engagement data (for lifecycle sync)
+// ---------------------------------------------------------------------------
+
+/**
+ * Get all leads for a campaign with per-lead engagement data.
+ * Auto-paginates through all results.
+ * @param {number} campaignId
+ * @param {number} [pageSize=100] - Records per page
+ * @returns {Promise<Array<Object>>} All leads with engagement fields
+ */
+async function getCampaignLeads(campaignId, pageSize = 100) {
+  const allLeads = [];
+  let offset = 0;
+  while (true) {
+    const page = await apiRequest(
+      "GET",
+      `/campaigns/${campaignId}/leads?limit=${pageSize}&offset=${offset}`
+    );
+    const leads = Array.isArray(page) ? page : page.data || [];
+    allLeads.push(...leads);
+    if (leads.length < pageSize) break;
+    offset += pageSize;
+  }
+  return allLeads;
+}
+
+/**
+ * Get message history for a specific lead in a campaign.
+ * @param {number} campaignId
+ * @param {number} leadId
+ * @returns {Promise<Array<Object>>} Message history array
+ */
+async function getLeadMessageHistory(campaignId, leadId) {
+  return apiRequest(
+    "GET",
+    `/campaigns/${campaignId}/leads/${leadId}/message-history`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
 module.exports = {
   listCampaigns, getCampaign, getCampaignStats, getCampaignLeadStats, getCampaignEmailAccounts,
+  getCampaignLeads, getLeadMessageHistory,
   uploadLeads, addLeadsToCampaign, chunkArray,
   verifyEmails, getVerificationStatus,
   listEmailAccounts, getEmailAccount, updateEmailAccount, getWarmupStats, setWarmup,
