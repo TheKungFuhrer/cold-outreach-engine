@@ -37,11 +37,9 @@ node scripts/dedup_audit.js --merge --dry-run
 
 ## Section 1: Data Loading & Normalization
 
-Accepts `--input <csv>`, defaulting to the latest `scripts/build-master.js` output. Uses `readCsv()` from `shared/csv.js` and `normalizeRow()` from `shared/fields.js` to standardize records into canonical shape:
+Accepts `--input <csv>`, defaulting to `data/master/leads_master.csv` (the output of `scripts/build-master.js`, which has the richest schema with `score`, `phone_type`, `is_venue`, `pipeline_stage`, etc.).
 
-```
-{ email, firstName, lastName, companyName, phone, website, domain, city, state, source, pipelineStage, ... }
-```
+Since the default input is already normalized by build-master, the script reads columns directly by their snake_case names (`email`, `first_name`, `last_name`, `company_name`, `phone`, `website`, `domain`, `city`, `state`, `source`, `pipeline_stage`, `score`, `in_smartlead`, etc.). For non-build-master inputs (via `--input`), uses `resolveField()` from `shared/fields.js` to map variant column names to canonical fields.
 
 Each record gets an internal `_id` (row index) for union-find operations.
 
@@ -68,7 +66,7 @@ Five layers, executed in order. Each builds a hash index (blocking key -> record
 Hash on lowercase email. O(n).
 
 ### Layer 2: Normalized Domain (Confidence: 90)
-Hash on `normalizeDomain(website)`. O(n). Same logic as existing dedup but feeding into union-find.
+Hash on `normalizeDomain(website)`. O(n). **Important:** This layer detects cross-source domain duplicates — records where the same entity appears with the same normalized domain but different emails. It does NOT collapse multiple contacts at the same company into one record (e.g., 5 AnyMailFinder contacts at `grandballroom.com` are different people, not duplicates). To achieve this, Layer 2 only unions records that share a domain AND have different email addresses AND come from different sources (or have no email on one side). Same-source, same-domain records with different emails are left as separate records.
 
 ### Layer 3: Phone Match (Confidence: 80)
 Hash on digits-only phone (minimum 7 digits). O(n). Only matches if both records have a phone.
@@ -78,10 +76,12 @@ Blocking key is `state` (or `city` if state missing). Within each block, pairwis
 - Levenshtein distance <= 3
 - Token overlap > 70%
 
-Only unions if fuzzy name match AND shared geographic block. This is the expensive layer — blocking by state keeps block sizes manageable (~2-5K records per state).
+Only unions if fuzzy name match AND shared geographic block. Records with no state AND no city are skipped from Layer 4 entirely — fuzzy name matching without geography is unreliable.
 
-### Layer 5: Cross-Domain Name Detection (Confidence: 75)
-Blocking key is exact normalized company name (after suffix stripping). Unions records with same company name but different domains. O(n).
+This is the expensive layer — blocking by state keeps block sizes manageable (~2-5K records per state). The Levenshtein implementation uses a single reusable row (O(min(m,n)) space) and short-circuits when the length difference alone exceeds the threshold of 3.
+
+### Layer 5: Cross-Domain Name Detection (Confidence: 80)
+Blocking key is exact normalized company name (after suffix stripping). Unions records with same company name but different domains. O(n). Confidence is 80 (not 75) because an exact normalized company name match across different domains is a strong signal — stronger than phone-only matching.
 
 ## Section 4: Confidence Scoring & Cluster Output
 
@@ -95,7 +95,7 @@ After all layers run, extract connected components. For each cluster with 2+ rec
 | `domain` alone | 90 |
 | `phone` + `fuzzy_name` | 85 |
 | `phone` alone | 80 |
-| `cross_domain_name` | 75 |
+| `cross_domain_name` | 80 |
 | `fuzzy_name+geo` alone | 70 |
 
 ### Output: `data/reports/duplicate_clusters.json`
@@ -135,7 +135,8 @@ One row per record in every cluster. Columns: `cluster_id, confidence, action, e
 
 `action` is `keep` or `discard`.
 
-**Richest record selection** — score each record:
+**Richest record selection** — primary tiebreaker is `score` (the 1-100 lead score from the scoring module, if present). When scores are equal or absent, fall back to richness points:
+
 | Field present | Points |
 |--------------|--------|
 | email | +3 |
@@ -145,7 +146,7 @@ One row per record in every cluster. Columns: `cluster_id, confidence, action, e
 | city or state | +1 |
 | higher pipeline_stage | +1 |
 
-Highest score wins. Ties broken by pipeline_stage rank, then source preference (SmartLead > AnyMailFinder > GeoLead).
+Remaining ties broken by pipeline_stage rank, then source preference (SmartLead > AnyMailFinder > GeoLead — SmartLead records may have engagement data).
 
 ### Output: `data/reports/smartlead_cleanup.csv`
 
@@ -184,8 +185,18 @@ For each mergeable cluster:
 **New (implemented in-script):**
 - UnionFind class (~30 lines)
 - `levenshtein(a, b)` — standard dynamic programming implementation
-- `tokenOverlap(a, b)` — intersection/union ratio of word tokens
+- `tokenOverlap(a, b)` — Jaccard similarity (intersection/union) of word token sets
 - `normalizeCompanyName(name)` — suffix stripping, lowercasing
 - `normalizePhone(phone)` — digits-only extraction
 
 **No new npm packages.**
+
+## Progress Logging
+
+Each layer logs a summary line to console on completion:
+```
+Layer 1 (exact_email): 450 unions across 225 clusters
+Layer 2 (domain_match): 1,200 unions across 800 clusters
+...
+```
+Final summary prints total clusters, breakdown by confidence tier, and estimated duplicate count.
