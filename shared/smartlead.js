@@ -8,9 +8,23 @@
  */
 
 const { requireEnv } = require("./env");
+const { execSync } = require("child_process");
+
+const DEBUG = process.env.SMARTLEAD_DEBUG || "";
+function debugLog(msg) {
+  if (DEBUG) process.stderr.write(`[SmartLead] ${msg}\n`);
+}
+function debugVerbose(msg) {
+  if (DEBUG === "verbose") process.stderr.write(`[SmartLead] ${msg}\n`);
+}
 
 const BASE_URL = "https://server.smartlead.ai/api/v1";
 
+/**
+ * Return the SmartLead API key from environment.
+ * @returns {string} API key
+ * @throws {Error} If SMARTLEAD_API_KEY is not set
+ */
 function getApiKey() {
   return requireEnv("SMARTLEAD_API_KEY");
 }
@@ -48,6 +62,15 @@ const rateLimiter = new RateLimiter();
 // Core HTTP helper
 // ---------------------------------------------------------------------------
 
+/**
+ * Make an authenticated request to the SmartLead REST API.
+ * @param {string} method - HTTP method (GET, POST, etc.)
+ * @param {string} path - API path (e.g. "/campaigns")
+ * @param {Object|null} body - JSON request body, or null for GET
+ * @param {number} retries - Number of retry attempts for 429/5xx errors
+ * @returns {Promise<Object|string>} Parsed JSON response, or raw text if not JSON
+ * @throws {Error} On non-retryable HTTP errors
+ */
 async function apiRequest(method, path, body = null, retries = 3) {
   const url = `${BASE_URL}${path}?api_key=${getApiKey()}`;
   const options = {
@@ -60,6 +83,7 @@ async function apiRequest(method, path, body = null, retries = 3) {
 
   await rateLimiter.acquire();
 
+  const start = Date.now();
   for (let attempt = 1; attempt <= retries; attempt++) {
     const res = await fetch(url, options);
 
@@ -76,6 +100,8 @@ async function apiRequest(method, path, body = null, retries = 3) {
     }
 
     const text = await res.text();
+    debugLog(`${method} ${path} → ${res.status} (${Date.now() - start}ms)`);
+    debugVerbose(`Response: ${text.slice(0, 500)}`);
     if (!res.ok) {
       throw new Error(
         `SmartLead API ${method} ${path} → ${res.status}: ${text}`
@@ -91,13 +117,72 @@ async function apiRequest(method, path, body = null, retries = 3) {
 }
 
 // ---------------------------------------------------------------------------
+// CLI helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a SmartLead CLI command synchronously.
+ * @param {string} args - CLI arguments (e.g. "campaigns list --format json")
+ * @param {Object} [options]
+ * @param {number} [options.timeout=60000] - Command timeout in ms
+ * @param {number} [options.maxBuffer=52428800] - Max stdout buffer (50 MB)
+ * @returns {string|null} CLI stdout, or null on error
+ * @note Never throws — returns null on CLI failure
+ */
+function runCLI(args, { timeout = 60000, maxBuffer = 50 * 1024 * 1024 } = {}) {
+  const apiKey = getApiKey();
+  const cmd = `smartlead --api-key "${apiKey}" ${args}`;
+  const start = Date.now();
+  try {
+    const output = execSync(cmd, {
+      encoding: "utf-8", timeout, maxBuffer,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    debugLog(`CLI: ${args} → OK (${Date.now() - start}ms)`);
+    return output;
+  } catch (err) {
+    debugLog(`CLI: ${args} → ERROR (${Date.now() - start}ms): ${err.message.split("\n")[0]}`);
+    return null;
+  }
+}
+
+/**
+ * Parse CLI output into a structured array or object.
+ * @param {string|null} output - Raw CLI stdout
+ * @returns {Array|Object|null} Parsed data, empty array for empty output, null on parse failure
+ */
+function parseCLIOutput(output) {
+  if (!output) return [];
+  const trimmed = output.trim();
+  if (!trimmed) return [];
+  try {
+    const jsonStart = trimmed.indexOf("[") !== -1 ? trimmed.indexOf("[") : trimmed.indexOf("{");
+    if (jsonStart === -1) return null;
+    const parsed = JSON.parse(trimmed.slice(jsonStart));
+    if (Array.isArray(parsed)) return parsed;
+    return parsed.data || parsed.results || [parsed];
+  } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
 // Campaign operations
 // ---------------------------------------------------------------------------
 
+/**
+ * List all campaigns.
+ * @returns {Promise<Array<Object>>} Array of campaign objects
+ * @throws {Error} On API error
+ */
 async function listCampaigns() {
   return apiRequest("GET", "/campaigns");
 }
 
+/**
+ * Get a single campaign by ID.
+ * @param {number} campaignId - Campaign ID
+ * @returns {Promise<Object>} Campaign details
+ * @throws {Error} On API error
+ */
 async function getCampaign(campaignId) {
   return apiRequest("GET", `/campaigns/${campaignId}`);
 }
@@ -111,7 +196,8 @@ async function getCampaign(campaignId) {
  * @param {number} campaignId
  * @param {Array<Object>} leads - array of lead objects with email, first_name, etc.
  * @param {Object} settings - optional upload settings
- * @returns {Object} API response
+ * @returns {Promise<Object>} API response
+ * @throws {Error} If more than 400 leads or on API error
  */
 async function uploadLeads(campaignId, leads, settings = {}) {
   if (leads.length > 400) {
@@ -128,7 +214,9 @@ async function uploadLeads(campaignId, leads, settings = {}) {
 /**
  * Add existing leads to a campaign by email.
  * @param {number} campaignId
- * @param {Array<string>} emailList
+ * @param {Array<string>} emailList - Array of email addresses
+ * @returns {Promise<Object>} API response
+ * @throws {Error} On API error
  */
 async function addLeadsToCampaign(campaignId, emailList) {
   return apiRequest("POST", `/campaigns/${campaignId}/leads/add`, {
@@ -140,30 +228,125 @@ async function addLeadsToCampaign(campaignId, emailList) {
 // Email verification
 // ---------------------------------------------------------------------------
 
+/**
+ * Trigger email verification for a campaign.
+ * @param {number} campaignId
+ * @returns {Promise<Object>} API response
+ * @throws {Error} On API error
+ */
 async function verifyEmails(campaignId) {
   return apiRequest("POST", `/campaigns/${campaignId}/verify-emails`);
 }
 
+/**
+ * Get email verification status for a campaign.
+ * @param {number} campaignId
+ * @returns {Promise<Object>} Verification status
+ * @throws {Error} On API error
+ */
 async function getVerificationStatus(campaignId) {
   return apiRequest("GET", `/campaigns/${campaignId}/verify-emails/status`);
+}
+
+// ---------------------------------------------------------------------------
+// Email account operations
+// ---------------------------------------------------------------------------
+
+/**
+ * List all email accounts.
+ * @returns {Promise<Array<Object>>} Array of email account objects
+ * @throws {Error} On API error
+ */
+async function listEmailAccounts() {
+  return apiRequest("GET", "/email-accounts");
+}
+
+/**
+ * Get a single email account by ID.
+ * @param {number} accountId - Email account ID
+ * @returns {Promise<Object>} Email account details
+ * @throws {Error} On API error
+ */
+async function getEmailAccount(accountId) {
+  return apiRequest("GET", `/email-accounts/${accountId}`);
+}
+
+/**
+ * Update an email account's configuration.
+ * @param {number} accountId - Email account ID
+ * @param {Object} config - Configuration fields to update
+ * @returns {Promise<Object>} API response
+ * @throws {Error} On API error
+ */
+async function updateEmailAccount(accountId, config) {
+  return apiRequest("POST", `/email-accounts/${accountId}`, config);
+}
+
+/**
+ * Get warmup statistics for an email account.
+ * @param {number} accountId - Email account ID
+ * @returns {Promise<Object>} Warmup stats
+ * @throws {Error} On API error
+ */
+async function getWarmupStats(accountId) {
+  return apiRequest("GET", `/email-accounts/${accountId}/warmup-stats`);
+}
+
+/**
+ * Enable or disable warmup for an email account.
+ * @param {number} accountId - Email account ID
+ * @param {boolean} enabled - Whether to enable warmup
+ * @returns {Promise<Object>} API response
+ * @throws {Error} On API error
+ */
+async function setWarmup(accountId, enabled) {
+  return apiRequest("POST", `/email-accounts/${accountId}/warmup`, { enabled });
 }
 
 // ---------------------------------------------------------------------------
 // Lead status / stats
 // ---------------------------------------------------------------------------
 
+/**
+ * Get lead-level stats for a campaign (counts by status).
+ * @param {number} campaignId
+ * @returns {Promise<Object>} Lead stats breakdown
+ * @throws {Error} On API error
+ */
 async function getCampaignLeadStats(campaignId) {
   return apiRequest("GET", `/campaigns/${campaignId}/leads/stats`);
 }
 
+/**
+ * Get campaign analytics (opens, replies, bounces, etc.).
+ * @param {number} campaignId
+ * @returns {Promise<Object>} Campaign analytics data
+ * @throws {Error} On API error
+ */
 async function getCampaignStats(campaignId) {
   return apiRequest("GET", `/campaigns/${campaignId}/analytics`);
+}
+
+/**
+ * Get email accounts linked to a campaign.
+ * @param {number} campaignId
+ * @returns {Promise<Array<Object>>} Array of email account objects
+ * @throws {Error} On API error
+ */
+async function getCampaignEmailAccounts(campaignId) {
+  return apiRequest("GET", `/campaigns/${campaignId}/email-accounts`);
 }
 
 // ---------------------------------------------------------------------------
 // Utility: chunk array for batch uploads
 // ---------------------------------------------------------------------------
 
+/**
+ * Split an array into chunks of the given size.
+ * @param {Array} arr - Array to chunk
+ * @param {number} [size=400] - Chunk size
+ * @returns {Array<Array>} Array of chunks
+ */
 function chunkArray(arr, size = 400) {
   const chunks = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -172,18 +355,87 @@ function chunkArray(arr, size = 400) {
   return chunks;
 }
 
+// ---------------------------------------------------------------------------
+// CLI wrapper functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Search for prospects using SmartLead CLI.
+ * @param {string} query - Search query string
+ * @returns {Array<Object>} Array of prospect results, or empty array on failure
+ * @note Never throws — returns empty array on CLI failure
+ */
+function prospectSearch(query) {
+  const output = runCLI(`prospect search --query "${query}" --format json`);
+  return parseCLIOutput(output) || [];
+}
+
+/**
+ * Find emails for a domain using SmartLead CLI prospect discovery.
+ * @param {string} domain - Domain to search (e.g. "example.com")
+ * @param {Object} [contact={}] - Optional contact hints (first_name, last_name, etc.)
+ * @returns {{ emails: Array, raw: string|null, error: string|null }} Results object
+ * @note Never throws — returns empty emails array on CLI failure
+ */
+function prospectFindEmails(domain, contact = {}) {
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+
+  const payload = { domain, ...contact };
+  const tmpFile = path.join(os.tmpdir(), `smartlead-prospect-${Date.now()}.json`);
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(payload));
+    const output = runCLI(`prospect find-emails --from-json "${tmpFile}"`);
+    const parsed = parseCLIOutput(output);
+    return { emails: parsed || [], raw: output, error: null };
+  } catch (err) {
+    return { emails: [], raw: null, error: err.message };
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
+}
+
+/**
+ * Export a campaign's leads to a CSV file using SmartLead CLI.
+ * @param {number} campaignId - Campaign ID to export
+ * @param {string} outPath - Output file path for the CSV
+ * @returns {boolean} True if export succeeded, false otherwise
+ * @note Never throws — returns false on CLI failure
+ */
+function exportCampaignCsv(campaignId, outPath) {
+  const output = runCLI(`campaigns export --id ${campaignId} --out "${outPath}"`);
+  return output !== null;
+}
+
+/**
+ * Export all leads across all campaigns as CSV using SmartLead CLI.
+ * @returns {string|null} CSV string, or null on failure
+ * @note Never throws — returns null on CLI failure
+ */
+function exportAllLeadsCsv() {
+  return runCLI("leads list-all --all --format csv", { timeout: 120000 });
+}
+
+/**
+ * Get lead category definitions from SmartLead CLI.
+ * @returns {Array<Object>|null} Array of category objects, or null on failure
+ * @note Never throws — returns null on CLI failure
+ */
+function getLeadCategories() {
+  const output = runCLI("leads categories --format json");
+  return parseCLIOutput(output);
+}
+
+// ---------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------
+
 module.exports = {
-  BASE_URL,
-  getApiKey,
-  RateLimiter,
-  apiRequest,
-  listCampaigns,
-  getCampaign,
-  uploadLeads,
-  addLeadsToCampaign,
-  verifyEmails,
-  getVerificationStatus,
-  getCampaignLeadStats,
-  getCampaignStats,
-  chunkArray,
+  listCampaigns, getCampaign, getCampaignStats, getCampaignLeadStats, getCampaignEmailAccounts,
+  uploadLeads, addLeadsToCampaign, chunkArray,
+  verifyEmails, getVerificationStatus,
+  listEmailAccounts, getEmailAccount, updateEmailAccount, getWarmupStats, setWarmup,
+  prospectSearch, prospectFindEmails,
+  exportCampaignCsv, exportAllLeadsCsv, getLeadCategories,
 };
