@@ -83,6 +83,16 @@ A shared SQLite database at a known filesystem path that both repos read from an
 - Email normalization: `email.trim().toLowerCase()` before all inserts and lookups
 - Upsert via `INSERT ... ON CONFLICT(email) DO UPDATE` — never overwrites `source` or `first_seen_*` timestamps
 - Schema version tracked via SQLite `user_version` pragma
+- `openDb()` must set `PRAGMA journal_mode = WAL` and `PRAGMA busy_timeout = 5000` — WAL allows concurrent reads during writes, busy_timeout prevents SQLITE_BUSY errors when both repos access the DB simultaneously
+- Migrations are additive only (new nullable columns, new indexes). `openDb()` applies all migrations up to its known version and tolerates higher versions gracefully (the other repo may have been updated first)
+
+### Dual-email handling for Skool members
+
+When a Skool member has both `survey_a1` and `email` and they differ, both emails get rows in the `contacts` table. Both rows receive identical values for: `skool_member = 1`, `skool_member_id`, `skool_classification`, `ghl_contact_id`. This ensures:
+
+- Overlap detection works regardless of which email the cold-outreach pipeline has
+- `getUntaggedOverlaps()` returns the correct `ghl_contact_id` from either row
+- Upload suppression catches both email addresses
 
 ## Sync Flow
 
@@ -116,7 +126,7 @@ In `scripts/sync-writeback.js`, after writing master notes:
 2. For each overlap, add `cold_outreach_overlap` tag via GHL API
 3. Call `markTagged(email)` for each success
 
-Uses existing `ghl-api.js` client. ~15-line addition.
+Requires adding an `addContactTag(contactId, tag)` function to `ghl-api.js` (uses existing `updateContact` with `tags` array merge). ~25-line addition total including the new helper.
 
 ## What Does NOT Change
 
@@ -132,7 +142,7 @@ Uses existing `ghl-api.js` client. ~15-line addition.
 - Contact first appears from Skool with referral indicated in `survey_a3`: `source = 'skool_referred'`
 - Contact first appears from Skool with no referral: `source = 'skool_organic'`
 - Source is set on first insert and never overwritten — it captures where the contact originated
-- Referral detection: `survey_a3` is checked for non-empty values that indicate a person referred them (vs generic answers like "Google" or "Facebook ad")
+- Referral detection: non-empty `survey_a3` values default to `skool_referred`, UNLESS the value matches an exclusion list of non-referral sources: "Google", "Facebook", "Instagram", "TikTok", "YouTube", "online", "search", "ad", "social media". Exclusion list is configurable in `shared-data/config.json`
 
 ## Dependencies
 
