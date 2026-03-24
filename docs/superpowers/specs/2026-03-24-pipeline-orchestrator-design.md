@@ -9,19 +9,19 @@ The cold outreach pipeline has 37 scripts across Node.js and Python, each run ma
 
 ## Solution
 
-A monolithic pipeline orchestrator (`pipeline.js` rewrite) that uses the master CSV's `pipeline_stage` column as the single source of truth for per-lead state. A JSON config file defines the pipeline as a DAG with sidecar support. The orchestrator queries the master CSV before each step, passes only eligible leads, and promotes their stage after completion.
+A monolithic pipeline orchestrator (`pipeline.js` rewrite) that uses the master CSV's `pipeline_stage` column as the single source of truth for per-lead state. A JSON config file defines the pipeline as an ordered step list with sidecar support. The orchestrator queries the master CSV before each step, passes only eligible leads, and promotes their stage after completion.
 
 ## Key Design Decisions
 
 1. **Orchestrator owns stage filtering** — the orchestrator queries the master CSV and passes only leads at the required `inputStage` to each script. Individual scripts do not need to know about the master CSV.
 2. **Two-phase async for batch classification** — async steps (Haiku batch) submit and exit. The next `pipeline.js run` detects the pending batch, collects results, and continues.
 3. **Partial progress is real progress** — if a step processes 3,000 of 5,000 leads then fails, those 3,000 get promoted in the master CSV immediately. The next run picks up the remaining 2,000.
-4. **Linear with sidecars** — the main pipeline is linear, but steps can define a sidecar that runs on a filtered subset (e.g., `escalate` runs on ambiguous leads after `classify`).
+4. **Linear with sidecars** — the main pipeline is an ordered step list. Steps execute in array order and this ordering is the sole enforcement mechanism (no explicit dependency edges). Steps can define a sidecar that runs on a filtered subset (e.g., `escalate` runs on ambiguous leads after `classify`).
 5. **Full rebuild + incremental updates** — full master CSV rebuild at the start of each run to sync state, then incremental updates after each step during the run.
 
 ## Pipeline Config (pipeline-config.json)
 
-The DAG is defined as a JSON array of step objects:
+The pipeline is defined as an ordered array of step objects:
 
 ```json
 {
@@ -47,7 +47,8 @@ The DAG is defined as a JSON array of step objects:
       "sidecar": {
         "name": "escalate",
         "script": "python 2-enrichment/escalate_sonnet.py",
-        "filter": { "field": "confidence", "op": "<", "value": 0.7 },
+        "inputSource": "data/classified/ambiguous.csv",
+        "outputStage": "classified",
         "inputFlag": "--input",
         "outputPath": "data/verified/venues.csv",
         "timeout": 600000
@@ -66,14 +67,14 @@ The DAG is defined as a JSON array of step objects:
       "name": "export",
       "script": "node 2-enrichment/export_clean.js",
       "inputStage": "validated",
-      "outputStage": "validated",
+      "outputStage": "exported",
       "outputPath": "data/final/",
       "timeout": 300000
     },
     {
       "name": "upload",
       "script": "node 3-outreach/upload_leads.js",
-      "inputStage": "validated",
+      "inputStage": "exported",
       "outputStage": "uploaded",
       "inputFlag": "--input",
       "outputPath": null,
@@ -109,6 +110,10 @@ The DAG is defined as a JSON array of step objects:
 }
 ```
 
+### Execution Order
+
+Steps execute in the order they appear in the `steps` array. This is the sole mechanism for enforcing ordering between steps that share the same `inputStage`/`outputStage`. For example, `verify` and `assign` both operate on `uploaded` leads — they run in array order, not in parallel. When using `--from`, execution starts at the named step's position in the array and proceeds forward.
+
 ### Config Field Reference
 
 | Field | Required | Description |
@@ -122,8 +127,9 @@ The DAG is defined as a JSON array of step objects:
 | `async` | No | `true` = two-phase submit/resume behavior |
 | `timeout` | No | Max execution time in ms (default from config or 300000) |
 | `requiresCampaign` | No | `true` = needs `--campaign-id` CLI arg |
-| `sidecar` | No | A sub-step that runs on a filtered subset of this step's output |
-| `sidecar.filter` | Yes (if sidecar) | `{ field, op, value }` — filter criteria for which leads go to the sidecar |
+| `sidecar` | No | A sub-step that runs after its parent step |
+| `sidecar.inputSource` | Yes (if sidecar) | Explicit file path for sidecar input (e.g., `data/classified/ambiguous.csv`). The sidecar reads from this file rather than the parent's `outputPath`. |
+| `sidecar.outputStage` | Yes (if sidecar) | Stage to promote sidecar output leads to. Escalated leads confirmed as venues get promoted to `classified` so they flow into `validate_phones`. |
 
 ## Orchestrator Flow
 
@@ -147,7 +153,7 @@ The DAG is defined as a JSON array of step objects:
    - Spawn the script via `child_process.spawn` (captures stdout/stderr, respects timeout)
    - **On success:** Read output CSV, call `promoteLeads()` to update master CSV incrementally, log timing
    - **On failure:** Retry up to N times with delay. Before each retry, check for partial output — if present, promote partial results and re-query for remaining leads only. After retries exhausted, log failure to `run_state.json`, move to next step.
-   - **If step has sidecar:** After main step succeeds, filter output for matching leads (per sidecar's `filter`), write temp input, run sidecar script, merge results back into master
+   - **If step has sidecar:** After main step succeeds, check if the sidecar's `inputSource` file exists and is non-empty. If so, run the sidecar script with that file as input. Promote sidecar output leads to `sidecar.outputStage` in the master CSV.
    - **If step is async:** Spawn script, capture batch ID from stdout, save to `run_state.json`, print "Batch submitted" message, exit cleanly
 
 ### Phase 4 — Report
@@ -205,10 +211,14 @@ Core functions extracted from `build-master.js`:
 Stages have a strict ordering enforced by `promoteLeads`:
 
 ```
-raw(0) < filtered(1) < classified(2) < validated(3) < enriched(4) < uploaded(5) < in_campaign(6)
+raw(0) < filtered(1) < classified(2) < validated(3) < exported(4) < uploaded(5) < in_campaign(6)
 ```
 
 A lead at `validated` cannot be demoted to `classified`. This prevents regressions when steps produce partial output.
+
+**Note on `enriched` stage:** The existing `build-master.js` assigns `enriched` to leads with AnyMailFinder-sourced emails. This stage is not produced by any orchestrator step — it is set during master CSV rebuild based on email source metadata. The `enriched` stage is removed from the orchestrator's stage ordering. Leads with AnyMailFinder emails will have their `pipeline_stage` set by whichever pipeline step they've actually completed (e.g., `classified` or `validated`). The `email_source` field already tracks AnyMailFinder provenance separately.
+
+**Migration:** The new stage ordering adds `exported` (rank 4) and removes `enriched`. Existing master CSV data is fully rebuilt on each run via `rebuildMaster()`, so stage values are recomputed from source data — no manual migration is needed. The `STAGE_RANK` constant moves from `build-master.js` to `shared/master.js`, and `build-master.js` imports it from there. Existing test imports (`build-master.test.js`) must be updated to import from `shared/master.js`.
 
 ## Async Two-Phase Flow
 
@@ -216,7 +226,7 @@ For steps with `async: true` (batch classification):
 
 **Submit phase:**
 1. Orchestrator writes eligible leads to temp input
-2. Script submits to Anthropic Batch API, prints batch ID to stdout
+2. Script submits to Anthropic Batch API, prints batch ID to stdout (requires a minor modification to `classify_batch.py` — see "What Changes")
 3. Orchestrator saves `{ "pending_batch": { "step": "classify", "batch_id": "...", "submitted_at": "..." } }` to `run_state.json`
 4. Orchestrator exits with message: `"Batch submitted. Run 'node pipeline.js run' again to check results."`
 
@@ -240,7 +250,7 @@ No retry for async steps — the batch either completes or fails on Anthropic's 
 
 ```
 pipeline.js                          # Orchestrator (rewrite)
-pipeline-config.json                 # DAG config
+pipeline-config.json                 # Pipeline step config
 shared/master.js                     # Extracted master CSV logic
 data/.pipeline/                      # Orchestrator working directory
   step_input.csv                     # Temp input for current step
@@ -253,15 +263,16 @@ data/.pipeline/                      # Orchestrator working directory
 
 | Component | Change |
 |-----------|--------|
-| `pipeline.js` | Full rewrite — DAG execution with stage filtering |
+| `pipeline.js` | Full rewrite — Ordered step execution with stage filtering |
 | `shared/master.js` | New file — extracted from `build-master.js` |
 | `scripts/build-master.js` | Refactored to import from `shared/master.js` |
-| `pipeline-config.json` | New file — DAG definition |
+| `pipeline-config.json` | New file — Pipeline step definitions |
 | `data/.pipeline/` | New directory — orchestrator state |
+| `2-enrichment/classify_batch.py` | Minor change — print batch ID to stdout in parseable format (`BATCH_ID:<id>`) when submitting async batch |
 
 ## What Doesn't Change
 
-- All individual pipeline scripts (`prefilter.js`, `classify_batch.py`, `validate_phones.py`, etc.) remain unchanged — they still accept `--input` and write to their existing output paths
+- Individual pipeline scripts (`prefilter.js`, `validate_phones.py`, `export_clean.js`, etc.) remain unchanged — they still accept `--input` and write to their existing output paths
 - `shared/csv.js`, `shared/dedup.js`, `shared/fields.js` unchanged
 - `scripts/daily-prospect.js` unchanged (it has its own pipeline logic for daily runs)
 - Data directory layout unchanged
