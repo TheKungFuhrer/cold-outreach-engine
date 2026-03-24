@@ -159,7 +159,7 @@ Lists every `discard` record that has `in_smartlead === true` or `pipeline_stage
 For each mergeable cluster:
 1. Select `keep` record via richness scoring
 2. Collect unique emails from `discard` records
-3. Append to `keep` record's `additional_emails` field (comma-separated, deduped)
+3. Append to `keep` record's `additional_emails` field (semicolon-separated, deduped — consistent with master CSV and GHL export format)
 4. Add `merged_from` field listing discarded record sources/emails for traceability
 
 **Backup:** Creates `.bak.<timestamp>` copy of original input before writing merged output.
