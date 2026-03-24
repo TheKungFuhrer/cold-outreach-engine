@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OMG Outreach Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 16px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    .header h1 { font-size: 1.5rem; color: #fff; }
+    .header .meta { color: #888; font-size: 0.85rem; }
+    .btn { background: #0f3460; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+    .btn:hover { background: #16213e; }
+    .btn-accent { background: #e94560; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    @media (min-width: 768px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 1200px) { .grid { grid-template-columns: repeat(3, 1fr); } }
+    .card { background: #16213e; border-radius: 12px; padding: 20px; }
+    .card-full { grid-column: 1 / -1; }
+    .card h2 { font-size: 1.1rem; color: #e94560; margin-bottom: 12px; }
+    .stat-row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .stat { text-align: center; flex: 1; min-width: 80px; }
+    .stat .value { font-size: 1.8rem; font-weight: bold; color: #fff; }
+    .stat .label { font-size: 0.75rem; color: #888; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 8px; color: #888; border-bottom: 1px solid #2a2a4a; }
+    td { padding: 8px; border-bottom: 1px solid #2a2a4a; }
+    .good { color: #4ade80; }
+    .warn { color: #fbbf24; }
+    .bad { color: #f87171; }
+    .lead-card { background: #1a1a2e; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+    .lead-card .company { font-weight: bold; color: #fff; }
+    .lead-card .phone a { color: #60a5fa; text-decoration: none; }
+    .lead-card .preview { color: #aaa; font-size: 0.85rem; margin-top: 6px; font-style: italic; }
+    .lead-card .score-badge { display: inline-block; background: #e94560; color: #fff; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
+    canvas { max-height: 300px; }
+    .funnel-bar { display: flex; align-items: center; margin-bottom: 8px; }
+    .funnel-bar .label { width: 120px; font-size: 0.85rem; color: #ccc; }
+    .funnel-bar .bar { height: 28px; background: #0f3460; border-radius: 4px; display: flex; align-items: center; padding: 0 8px; font-size: 0.8rem; color: #fff; min-width: 40px; transition: width 0.5s; }
+    .funnel-bar .rate { margin-left: 8px; font-size: 0.75rem; color: #888; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>OMG Outreach Dashboard</h1>
+      <div class="meta">Last refreshed: <span id="refreshed-at">—</span></div>
+    </div>
+    <div>
+      <button class="btn" onclick="loadData()">Refresh</button>
+      <button class="btn btn-accent" onclick="exportCsv()">Export Hot Leads CSV</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card card-full">
+      <h2>Pipeline Funnel</h2>
+      <div id="funnel"></div>
+    </div>
+
+    <div class="card card-full">
+      <h2>Campaign Performance</h2>
+      <div style="overflow-x:auto"><table id="campaigns-table"><thead><tr><th>Campaign</th><th>Sent</th><th>Opened</th><th>Replied</th><th>Bounced</th><th>Open %</th><th>Reply %</th><th>Bounce %</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="card">
+      <h2>Lead Score Distribution</h2>
+      <canvas id="score-chart"></canvas>
+      <div class="stat-row" style="margin-top:12px">
+        <div class="stat"><div class="value" id="score-mean">—</div><div class="label">Mean</div></div>
+        <div class="stat"><div class="value" id="score-median">—</div><div class="label">Median</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Hot Leads <span id="hot-count" style="color:#888;font-size:0.85rem"></span></h2>
+      <div id="hot-leads"></div>
+    </div>
+
+    <div class="card">
+      <h2>Dead Leads</h2>
+      <div class="stat-row">
+        <div class="stat"><div class="value bad" id="dead-bounced">0</div><div class="label">Bounced</div></div>
+        <div class="stat"><div class="value warn" id="dead-unsub">0</div><div class="label">Unsubscribed</div></div>
+        <div class="stat"><div class="value" id="dead-total">0</div><div class="label">Total Dead</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Cost Metrics</h2>
+      <table id="cost-table"><thead><tr><th>Stage</th><th>Cost/Lead</th><th>Total</th></tr></thead><tbody></tbody></table>
+      <div style="margin-top:12px;text-align:right;font-weight:bold;color:#e94560">
+        Total: $<span id="total-spend">0</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Pipeline Freshness</h2>
+      <table id="freshness-table"><thead><tr><th>Stage</th><th>Unprocessed</th><th>Oldest (days)</th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <h2>Source Quality</h2>
+      <canvas id="source-chart"></canvas>
+    </div>
+
+    <div class="card card-full">
+      <h2>Top Search Terms</h2>
+      <div style="overflow-x:auto"><table id="source-detail-table"><thead><tr><th>Search Term</th><th>Count</th><th>Avg Score</th><th>Conv %</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <script>
+    let scoreChart = null;
+    let sourceChart = null;
+
+    function fmt(n) { return (n || 0).toLocaleString(); }
+    function pct(n) { return ((n || 0) * 100).toFixed(1) + "%"; }
+    function rateClass(rate, good, bad) { return rate >= good ? "good" : rate <= bad ? "bad" : "warn"; }
+
+    async function loadData() {
+      try {
+        const res = await fetch("/api/data");
+        const data = await res.json();
+        render(data);
+      } catch (err) {
+        console.error("Failed to load data:", err);
+      }
+    }
+
+    function exportCsv() {
+      window.location.href = "/api/hot-leads.csv";
+    }
+
+    function render(d) {
+      document.getElementById("refreshed-at").textContent = new Date(d.generatedAt).toLocaleString();
+
+      // Funnel
+      const funnelEl = document.getElementById("funnel");
+      const maxCount = Math.max(...d.funnel.stages.map(s => s.count), 1);
+      funnelEl.innerHTML = d.funnel.stages.map(s => {
+        const width = Math.max((s.count / maxCount) * 100, 5);
+        const rate = s.conversionRate !== null ? `${pct(s.conversionRate)}` : "";
+        return `<div class="funnel-bar"><span class="label">${s.name}</span><div class="bar" style="width:${width}%">${fmt(s.count)}</div><span class="rate">${rate}</span></div>`;
+      }).join("");
+
+      // Campaigns
+      const tbody = document.querySelector("#campaigns-table tbody");
+      tbody.innerHTML = d.campaigns.map(c => `<tr>
+        <td>${c.name}</td><td>${fmt(c.sent)}</td><td>${fmt(c.opened)}</td><td>${fmt(c.replied)}</td><td>${fmt(c.bounced)}</td>
+        <td class="${rateClass(c.openRate, 0.20, 0.10)}">${pct(c.openRate)}</td>
+        <td class="${rateClass(c.replyRate, 0.01, 0.003)}">${pct(c.replyRate)}</td>
+        <td class="${rateClass(1 - c.bounceRate, 0.95, 0.90)}">${pct(c.bounceRate)}</td>
+      </tr>`).join("");
+
+      // Score Distribution
+      if (scoreChart) scoreChart.destroy();
+      const ctx = document.getElementById("score-chart").getContext("2d");
+      scoreChart = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: d.scoreDistribution.buckets.map(b => b.range),
+          datasets: [{ label: "Leads", data: d.scoreDistribution.buckets.map(b => b.count), backgroundColor: "#0f3460", borderRadius: 4 }],
+        },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: "#888" } }, x: { ticks: { color: "#888" } } } },
+      });
+      document.getElementById("score-mean").textContent = d.scoreDistribution.mean;
+      document.getElementById("score-median").textContent = d.scoreDistribution.median;
+
+      // Hot Leads
+      const hotEl = document.getElementById("hot-leads");
+      document.getElementById("hot-count").textContent = d.hotLeads.length > 0 ? `(${d.hotLeads.length})` : "";
+      if (d.hotLeads.length === 0) {
+        hotEl.innerHTML = '<div style="color:#888;padding:20px;text-align:center">No new replies since last sync</div>';
+      } else {
+        hotEl.innerHTML = d.hotLeads.map(l => `<div class="lead-card">
+          <div class="company">${l.company || "Unknown"} <span class="score-badge">${l.score}</span></div>
+          <div class="phone"><a href="tel:${l.phone}">${l.phone || "No phone"}</a> &middot; ${l.email}</div>
+          <div class="preview">"${l.replyPreview}"</div>
+        </div>`).join("");
+      }
+
+      // Dead Leads
+      document.getElementById("dead-bounced").textContent = fmt(d.deadLeads.bounced);
+      document.getElementById("dead-unsub").textContent = fmt(d.deadLeads.unsubscribed);
+      document.getElementById("dead-total").textContent = fmt(d.deadLeads.total);
+
+      // Cost Metrics
+      const costBody = document.querySelector("#cost-table tbody");
+      costBody.innerHTML = d.costs.perStage.map(c => `<tr><td>${c.stage}</td><td>$${c.costPerLead.toFixed(4)}</td><td>$${c.totalCost.toFixed(2)}</td></tr>`).join("");
+      document.getElementById("total-spend").textContent = d.costs.totalSpend.toFixed(2);
+
+      // Freshness
+      const freshBody = document.querySelector("#freshness-table tbody");
+      freshBody.innerHTML = d.freshness.stages.map(s => {
+        const cls = s.unprocessedCount > 500 ? "bad" : s.unprocessedCount > 100 ? "warn" : "good";
+        const dayCls = s.oldestDays > 7 ? "bad" : s.oldestDays > 3 ? "warn" : "good";
+        return `<tr><td>${s.name}</td><td class="${cls}">${fmt(s.unprocessedCount)}</td><td class="${dayCls}">${s.oldestDays}d</td></tr>`;
+      }).join("");
+
+      // Source Quality — Bar Chart
+      if (sourceChart) sourceChart.destroy();
+      if (d.sourceQuality.bySource.length > 0) {
+        const sCtx = document.getElementById("source-chart").getContext("2d");
+        sourceChart = new Chart(sCtx, {
+          type: "bar",
+          data: {
+            labels: d.sourceQuality.bySource.map(s => s.source),
+            datasets: [
+              { label: "Avg Score", data: d.sourceQuality.bySource.map(s => s.avgScore), backgroundColor: "#0f3460", borderRadius: 4 },
+              { label: "Conv %", data: d.sourceQuality.bySource.map(s => +(s.conversionRate * 100).toFixed(1)), backgroundColor: "#e94560", borderRadius: 4 },
+            ],
+          },
+          options: { responsive: true, scales: { y: { beginAtZero: true, ticks: { color: "#888" } }, x: { ticks: { color: "#888" } } }, plugins: { legend: { labels: { color: "#ccc" } } } },
+        });
+      }
+
+      // Source Quality — Detail Table
+      const detailBody = document.querySelector("#source-detail-table tbody");
+      const top20 = d.sourceQuality.byDetail.slice(0, 20);
+      detailBody.innerHTML = top20.map((s, i) => {
+        const highlight = i < 5 ? ' style="background:#1e2d4a"' : "";
+        return `<tr${highlight}><td>${s.searchTerm}</td><td>${fmt(s.count)}</td><td>${s.avgScore}</td><td>${pct(s.conversionRate)}</td></tr>`;
+      }).join("");
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
