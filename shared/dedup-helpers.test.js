@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { UnionFind } from "./dedup-helpers.js";
+import { UnionFind, levenshtein, tokenOverlap, normalizeCompanyName, normalizePhone } from "./dedup-helpers.js";
 
 describe("UnionFind", () => {
   it("find returns element itself initially", () => {
@@ -48,5 +48,88 @@ describe("UnionFind", () => {
     uf.union(0, 2, "exact_email");
     const comps = uf.components();
     expect(comps[0].reasons).toEqual(["exact_email"]);
+  });
+});
+
+describe("levenshtein", () => {
+  it("identical strings return 0", () => {
+    expect(levenshtein("hello", "hello")).toBe(0);
+  });
+  it("single character difference", () => {
+    expect(levenshtein("cat", "bat")).toBe(1);
+  });
+  it("insertion", () => {
+    expect(levenshtein("cat", "cats")).toBe(1);
+  });
+  it("deletion", () => {
+    expect(levenshtein("cats", "cat")).toBe(1);
+  });
+  it("empty strings", () => {
+    expect(levenshtein("", "abc")).toBe(3);
+    expect(levenshtein("abc", "")).toBe(3);
+    expect(levenshtein("", "")).toBe(0);
+  });
+  it("grand ballroom typo", () => {
+    expect(levenshtein("grand ballroom", "grand balroom")).toBe(1);
+  });
+  it("short-circuits on length difference > threshold when using threshold", () => {
+    expect(levenshtein("a", "abcdef")).toBe(5);
+  });
+});
+
+describe("tokenOverlap", () => {
+  it("identical tokens return 1.0", () => {
+    expect(tokenOverlap("grand ballroom", "grand ballroom")).toBe(1.0);
+  });
+  it("partial overlap", () => {
+    expect(tokenOverlap("grand ballroom event center", "grand ballroom events")).toBeCloseTo(0.4, 1);
+  });
+  it("no overlap returns 0", () => {
+    expect(tokenOverlap("alpha beta", "gamma delta")).toBe(0);
+  });
+  it("empty strings return 0", () => {
+    expect(tokenOverlap("", "hello")).toBe(0);
+    expect(tokenOverlap("", "")).toBe(0);
+  });
+});
+
+describe("normalizeCompanyName", () => {
+  it("strips LLC suffix", () => {
+    expect(normalizeCompanyName("Grand Ballroom LLC")).toBe("grand ballroom");
+  });
+  it("strips Inc. suffix", () => {
+    expect(normalizeCompanyName("Rosewood Events Inc.")).toBe("rosewood events");
+  });
+  it("strips leading The", () => {
+    expect(normalizeCompanyName("The Grand Ballroom")).toBe("grand ballroom");
+  });
+  it("strips multiple suffixes and leading The", () => {
+    expect(normalizeCompanyName("The Grand Ballroom, LLC")).toBe("grand ballroom");
+  });
+  it("lowercases", () => {
+    expect(normalizeCompanyName("ROSE GARDEN")).toBe("rose garden");
+  });
+  it("handles empty/null", () => {
+    expect(normalizeCompanyName("")).toBe("");
+    expect(normalizeCompanyName(null)).toBe("");
+  });
+  it("trims whitespace and punctuation", () => {
+    expect(normalizeCompanyName("  Grand Ballroom,  ")).toBe("grand ballroom");
+  });
+});
+
+describe("normalizePhone", () => {
+  it("strips non-digits", () => {
+    expect(normalizePhone("+1 (555) 123-4567")).toBe("15551234567");
+  });
+  it("returns empty for short numbers", () => {
+    expect(normalizePhone("123")).toBe("");
+  });
+  it("returns empty for empty/null", () => {
+    expect(normalizePhone("")).toBe("");
+    expect(normalizePhone(null)).toBe("");
+  });
+  it("passes through 10-digit number", () => {
+    expect(normalizePhone("5551234567")).toBe("5551234567");
   });
 });
