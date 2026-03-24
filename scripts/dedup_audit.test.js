@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const { loadAndNormalize, runLayers, scoreCluster, selectKeepRecord, buildClusterOutput } = require("./dedup_audit.js");
+const { loadAndNormalize, runLayers, scoreCluster, selectKeepRecord, buildClusterOutput, performMerge } = require("./dedup_audit.js");
 const { UnionFind } = require("../shared/dedup-helpers.js");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -114,5 +114,49 @@ describe("buildClusterOutput", () => {
     expect(clusters[0].confidence).toBe(100);
     expect(clusters[0].records).toHaveLength(2);
     expect(summary.totalClusters).toBe(1);
+  });
+});
+
+describe("performMerge", () => {
+  it("keeps richest record and collects additional emails", () => {
+    const records = [
+      {
+        _id: 0, _email: "keep@x.com", _domain: "x.com", _phone: "555",
+        _firstName: "J", _lastName: "D", _companyNorm: "venue", _city: "A",
+        _state: "TX", _source: "smartlead", _pipelineStage: "enriched", _score: 85,
+        email: "keep@x.com", additional_emails: "",
+      },
+      {
+        _id: 1, _email: "discard@x.com", _domain: "x.com", _phone: "",
+        _firstName: "", _lastName: "", _companyNorm: "venue", _city: "",
+        _state: "", _source: "geolead", _pipelineStage: "raw", _score: 0,
+        email: "discard@x.com", additional_emails: "",
+      },
+    ];
+    const clusters = [{
+      clusterId: 1, confidence: 90, reasons: ["domain_match"],
+      keepId: 0,
+      records: records.map(r => ({ _id: r._id, email: r._email })),
+    }];
+    const { merged, discarded } = performMerge(records, clusters);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]._email).toBe("keep@x.com");
+    expect(merged[0].additional_emails).toContain("discard@x.com");
+    expect(discarded).toHaveLength(1);
+  });
+
+  it("does not merge clusters below confidence 80", () => {
+    const records = [
+      { _id: 0, _email: "a@x.com", email: "a@x.com", additional_emails: "" },
+      { _id: 1, _email: "b@y.com", email: "b@y.com", additional_emails: "" },
+    ];
+    const clusters = [{
+      clusterId: 1, confidence: 70, reasons: ["fuzzy_name+geo"],
+      keepId: 0,
+      records: records.map(r => ({ _id: r._id, email: r._email })),
+    }];
+    const { merged, discarded } = performMerge(records, clusters);
+    expect(merged).toHaveLength(2);
+    expect(discarded).toHaveLength(0);
   });
 });

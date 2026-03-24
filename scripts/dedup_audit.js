@@ -224,4 +224,180 @@ function buildClusterOutput(uf, records) {
   };
 }
 
-module.exports = { loadAndNormalize, runLayers, scoreCluster, selectKeepRecord, buildClusterOutput, STAGE_RANK, SOURCE_RANK };
+const MERGE_THRESHOLD = 80;
+
+function performMerge(records, clusters) {
+  const discardSet = new Set();
+  // Build a lookup from _id → record index
+  const byId = new Map(records.map((r, i) => [r._id, i]));
+
+  for (const cluster of clusters) {
+    if (cluster.confidence < MERGE_THRESHOLD) continue;
+    if (cluster.records.length < 2) continue;
+
+    const keepId = cluster.keepId;
+    const keepIdx = byId.get(keepId);
+    if (keepIdx === undefined) continue;
+
+    const keepRecord = records[keepIdx];
+
+    // Collect additional emails from discarded records
+    const existingExtras = keepRecord.additional_emails
+      ? keepRecord.additional_emails.split(";").map(e => e.trim()).filter(Boolean)
+      : [];
+    const extraSet = new Set(existingExtras);
+
+    const mergedFrom = [];
+    for (const ref of cluster.records) {
+      if (ref._id === keepId) continue;
+      discardSet.add(ref._id);
+      mergedFrom.push(ref._id);
+      const discardEmail = ref.email || ref._email || "";
+      if (discardEmail && discardEmail !== keepRecord._email) {
+        extraSet.add(discardEmail);
+      }
+      // Also pick up any additional_emails from discarded record
+      const discardIdx = byId.get(ref._id);
+      if (discardIdx !== undefined) {
+        const discardRecord = records[discardIdx];
+        if (discardRecord.additional_emails) {
+          for (const e of discardRecord.additional_emails.split(";").map(e => e.trim()).filter(Boolean)) {
+            if (e !== keepRecord._email) extraSet.add(e);
+          }
+        }
+      }
+    }
+
+    // Update keep record in-place
+    keepRecord.additional_emails = Array.from(extraSet).join(";");
+    keepRecord.merged_from = mergedFrom.join(";");
+  }
+
+  const merged = records.filter(r => !discardSet.has(r._id));
+  const discarded = records.filter(r => discardSet.has(r._id));
+  return { merged, discarded };
+}
+
+function writeReports(clusterOutput, records, inputPath) {
+  const reportsDir = projectPath("data", "reports");
+  ensureDir(reportsDir);
+
+  // 1. duplicate_clusters.json
+  const clustersJson = path.join(reportsDir, "duplicate_clusters.json");
+  fs.writeFileSync(clustersJson, JSON.stringify(clusterOutput, null, 2));
+  console.log(`  Wrote ${clustersJson}`);
+
+  // 2. dedup_recommendations.csv
+  const recRows = [];
+  for (const cluster of clusterOutput.clusters) {
+    for (const rec of cluster.records) {
+      const action = rec._id === cluster.keepId ? "keep" : "discard";
+      recRows.push({
+        cluster_id: cluster.clusterId ?? "",
+        confidence: cluster.confidence,
+        action,
+        email: rec._email || rec.email || "",
+        company_name: rec._companyNorm || "",
+        domain: rec._domain || "",
+        phone: rec._phone || "",
+        source: rec._source || "",
+        reason: cluster.reasons.join(","),
+      });
+    }
+  }
+  const recCsv = path.join(reportsDir, "dedup_recommendations.csv");
+  writeCsv(recCsv, recRows, ["cluster_id", "confidence", "action", "email", "company_name", "domain", "phone", "source", "reason"]);
+  console.log(`  Wrote ${recCsv}`);
+
+  // 3. smartlead_cleanup.csv
+  const cleanupRows = [];
+  for (const cluster of clusterOutput.clusters) {
+    for (const rec of cluster.records) {
+      if (rec._id === cluster.keepId) continue;
+      const inSmartlead = rec.in_smartlead === "true" ||
+        rec._pipelineStage === "uploaded" ||
+        rec._pipelineStage === "in_campaign";
+      if (!inSmartlead) continue;
+      cleanupRows.push({
+        cluster_id: cluster.clusterId ?? "",
+        confidence: cluster.confidence,
+        action: "discard",
+        email: rec._email || rec.email || "",
+        company_name: rec._companyNorm || "",
+        domain: rec._domain || "",
+        phone: rec._phone || "",
+        source: rec._source || "",
+        pipeline_stage: rec._pipelineStage || "",
+        campaign_id: rec.campaign_id || "",
+        reason: cluster.reasons.join(","),
+      });
+    }
+  }
+  const cleanupCsv = path.join(reportsDir, "smartlead_cleanup.csv");
+  writeCsv(cleanupCsv, cleanupRows, ["cluster_id", "confidence", "action", "email", "company_name", "domain", "phone", "source", "pipeline_stage", "campaign_id", "reason"]);
+  console.log(`  Wrote ${cleanupCsv}`);
+}
+
+function parseArgs(argv) {
+  const args = { input: projectPath("data", "master", "leads_master.csv"), merge: false, dryRun: false };
+  for (let i = 2; i < argv.length; i++) {
+    if (argv[i] === "--input" && argv[i + 1]) { args.input = argv[++i]; }
+    else if (argv[i] === "--merge") { args.merge = true; }
+    else if (argv[i] === "--dry-run") { args.dryRun = true; }
+  }
+  return args;
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  console.log(`Input: ${args.input}`);
+  console.log("Loading and normalizing records...");
+  const records = loadAndNormalize(args.input);
+  console.log(`  Loaded ${records.length} records`);
+
+  console.log("Running dedup layers...");
+  const uf = runLayers(records);
+
+  console.log("Building cluster output...");
+  const clusterOutput = buildClusterOutput(uf, records);
+  const { summary } = clusterOutput;
+  console.log(`  Total clusters: ${summary.totalClusters}`);
+  console.log(`  By confidence: ${JSON.stringify(summary.byConfidence)}`);
+  console.log(`  Estimated duplicate records: ${summary.estimatedDuplicateRecords}`);
+
+  // Assign stable clusterId for reporting
+  clusterOutput.clusters.forEach((c, i) => { c.clusterId = i + 1; });
+
+  console.log("Writing reports...");
+  writeReports(clusterOutput, records, args.input);
+
+  if (args.merge) {
+    const { merged, discarded } = performMerge(records, clusterOutput.clusters);
+    console.log(`Merge: ${merged.length} kept, ${discarded.length} discarded`);
+
+    if (!args.dryRun) {
+      // Backup original
+      const ts = timestamp();
+      const backupPath = `${args.input}.bak.${ts}`;
+      fs.copyFileSync(args.input, backupPath);
+      console.log(`  Backup written to ${backupPath}`);
+
+      // Strip internal _ fields before writing
+      const cleanRecords = merged.map(r => {
+        const out = {};
+        for (const [k, v] of Object.entries(r)) {
+          if (!k.startsWith("_")) out[k] = v;
+        }
+        return out;
+      });
+      writeCsv(args.input, cleanRecords);
+      console.log(`  Merged CSV written to ${args.input}`);
+    } else {
+      console.log("  Dry-run: no files written");
+    }
+  }
+}
+
+if (require.main === module) main().catch(err => { console.error(err); process.exit(1); });
+
+module.exports = { loadAndNormalize, runLayers, scoreCluster, selectKeepRecord, buildClusterOutput, performMerge, STAGE_RANK, SOURCE_RANK };
