@@ -19,81 +19,15 @@ const { readCsv } = csv;
 const { normalizeRow, resolveField, parseLocationFull, parseName } = require("../shared/fields");
 const { normalizeDomain } = require("../shared/dedup");
 const { projectPath } = require("../shared/utils");
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const MASTER_COLUMNS = [
-  "domain", "email", "first_name", "last_name", "company_name",
-  "phone", "phone_type", "phone_carrier", "website", "location_raw",
-  "city", "state", "zip", "is_venue", "confidence",
-  "classification_reasoning", "score", "source", "source_detail",
-  "email_source", "pipeline_stage", "last_updated",
-];
-
-/** Company-level fields that get inherited when a new email is added to an existing domain. */
-const COMPANY_FIELDS = [
-  "company_name", "phone", "phone_type", "phone_carrier", "website",
-  "location_raw", "city", "state", "zip", "is_venue", "confidence",
-  "classification_reasoning", "source", "source_detail",
-];
-
-const STAGE_RANK = {
-  raw: 0, filtered: 1, classified: 2, validated: 3,
-  enriched: 4, uploaded: 5, in_campaign: 6,
-};
-
-// ---------------------------------------------------------------------------
-// Merge map — Map<domain, Map<email, record>>
-// ---------------------------------------------------------------------------
-
-function createMergeMap() {
-  return new Map();
-}
-
-/**
- * Merge a record into the map. Fills empty fields but never overwrites populated ones.
- * If the domain already exists but this email is new, inherits company-level fields.
- * Pass forceFields array to overwrite specific fields even if already set (used by
- * verified/escalated ingestor to upgrade classifications).
- */
-function mergeIntoMap(map, record, forceFields = []) {
-  const domain = record.domain;
-  const email = record.email;
-  if (!domain && !email) return;
-
-  const key = domain || email;
-  if (!map.has(key)) map.set(key, new Map());
-  const domainMap = map.get(key);
-
-  if (!domainMap.has(email)) {
-    // New email for this domain — inherit company-level fields from first existing record
-    const inherited = {};
-    if (domainMap.size > 0) {
-      const firstRecord = domainMap.values().next().value;
-      for (const field of COMPANY_FIELDS) {
-        if (firstRecord[field]) inherited[field] = firstRecord[field];
-      }
-    }
-    domainMap.set(email, { ...inherited, ...stripEmpty(record) });
-  } else {
-    // Existing domain+email — fill blanks, and force-overwrite specified fields
-    const existing = domainMap.get(email);
-    for (const [k, v] of Object.entries(record)) {
-      if (v && (!existing[k] || forceFields.includes(k))) existing[k] = v;
-    }
-  }
-}
-
-/** Remove empty-string and undefined values from an object. */
-function stripEmpty(obj) {
-  const result = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (v !== undefined && v !== null && v !== "") result[k] = v;
-  }
-  return result;
-}
+const {
+  MASTER_COLUMNS,
+  COMPANY_FIELDS,
+  STAGE_RANK,
+  MASTER_CSV_PATH,
+  createMergeMap,
+  mergeIntoMap,
+  stripEmpty,
+} = require("../shared/master");
 
 // ---------------------------------------------------------------------------
 // Source ingestors — each reads one data source and feeds into the merge map
@@ -448,7 +382,6 @@ function enrichRecords(map) {
 // ---------------------------------------------------------------------------
 
 function writeMasterCsv(records) {
-  const outputPath = projectPath("data", "master", "leads_master.csv");
   const rows = records.map(r => {
     const out = {};
     for (const col of MASTER_COLUMNS) {
@@ -456,8 +389,8 @@ function writeMasterCsv(records) {
     }
     return out;
   });
-  csv.writeCsv(outputPath, rows, MASTER_COLUMNS);
-  return outputPath;
+  csv.writeCsv(MASTER_CSV_PATH, rows, MASTER_COLUMNS);
+  return MASTER_CSV_PATH;
 }
 
 // ---------------------------------------------------------------------------
@@ -672,8 +605,12 @@ function main() {
 
 // Export internals for testing
 module.exports = {
+  // Re-exported from shared/master.js
   createMergeMap,
   mergeIntoMap,
+  MASTER_COLUMNS,
+  STAGE_RANK,
+  // Local to build-master.js
   enrichRecords,
   computePipelineStage,
   filterRecords,
@@ -684,8 +621,6 @@ module.exports = {
   exportGhlCompanies,
   exportGhlOpportunities,
   writeMasterCsv,
-  MASTER_COLUMNS,
-  STAGE_RANK,
 };
 
 // Run main only when executed directly
