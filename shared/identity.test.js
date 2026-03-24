@@ -48,3 +48,68 @@ describe("identity-db", () => {
     expect(version).toBe(SCHEMA_VERSION);
   });
 });
+
+describe("cold-outreach identity adapter", () => {
+  beforeEach(() => {
+    openDb(TEST_DB_PATH);
+  });
+
+  afterEach(() => {
+    closeDb();
+    for (const ext of ["", "-wal", "-shm"]) {
+      try { fs.unlinkSync(TEST_DB_PATH + ext); } catch {}
+    }
+  });
+
+  it("loadColdLeads inserts records with cold_outreach_lead=1", () => {
+    const records = [
+      { email: "Alice@Example.com", first_name: "Alice", last_name: "Smith", company_name: "Venue A", website: "example.com" },
+      { email: "bob@test.org", first_name: "Bob", last_name: "Jones", company_name: "Venue B", website: "test.org" },
+    ];
+    const result = loadColdLeads(records);
+    expect(result.upserted).toBe(2);
+    expect(result.skipped).toBe(0);
+
+    const stats = getStats();
+    expect(stats.total).toBe(2);
+    expect(stats.cold_outreach).toBe(2);
+    expect(stats.skool).toBe(0);
+  });
+
+  it("loadColdLeads upserts without overwriting skool data", () => {
+    const db = openDb(TEST_DB_PATH);
+    db.prepare(`INSERT INTO contacts (email, domain, source, skool_member, skool_member_id, first_seen_skool)
+                VALUES (?, ?, ?, 1, ?, ?)`).run("alice@example.com", "example.com", "skool_organic", "abc123", "2026-01-01T00:00:00Z");
+
+    const records = [{ email: "Alice@Example.com", first_name: "Alice", company_name: "Venue A", website: "example.com" }];
+    loadColdLeads(records);
+
+    const row = db.prepare("SELECT * FROM contacts WHERE email = ?").get("alice@example.com");
+    expect(row.cold_outreach_lead).toBe(1);
+    expect(row.skool_member).toBe(1);
+    expect(row.skool_member_id).toBe("abc123");
+    expect(row.source).toBe("skool_organic");
+  });
+
+  it("checkOverlaps returns emails that are skool members", () => {
+    const db = openDb(TEST_DB_PATH);
+    db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead, skool_member)
+                VALUES (?, ?, ?, 1, 1)`).run("overlap@test.com", "test.com", "cold_outreach");
+    db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead)
+                VALUES (?, ?, ?, 1)`).run("nooverlap@test.com", "test.com", "cold_outreach");
+
+    const overlaps = checkOverlaps(["overlap@test.com", "nooverlap@test.com", "unknown@test.com"]);
+    expect(overlaps).toEqual(["overlap@test.com"]);
+  });
+
+  it("markSuppressed sets smartlead_suppressed=1", () => {
+    const db = openDb(TEST_DB_PATH);
+    db.prepare(`INSERT INTO contacts (email, domain, source, cold_outreach_lead)
+                VALUES (?, ?, ?, 1)`).run("test@test.com", "test.com", "cold_outreach");
+
+    markSuppressed(["test@test.com"]);
+
+    const row = db.prepare("SELECT smartlead_suppressed FROM contacts WHERE email = ?").get("test@test.com");
+    expect(row.smartlead_suppressed).toBe(1);
+  });
+});
