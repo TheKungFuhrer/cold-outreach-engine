@@ -16,6 +16,15 @@ const { uploadLeads, chunkArray } = require("../shared/smartlead");
 const { loadJsonl, appendJsonl } = require("../shared/progress");
 const { projectPath, ensureDir, timestamp } = require("../shared/utils");
 
+let identityAvailable = false;
+try {
+  var { openDb: openIdentityDb, closeDb: closeIdentityDb } = require("../shared/identity-db");
+  var { checkOverlaps, markSuppressed } = require("../shared/identity");
+  identityAvailable = true;
+} catch {
+  // Identity layer not installed — skip suppression
+}
+
 const CHECKPOINT_PATH = projectPath("data", "reports", ".upload_progress.jsonl");
 const FAILURES_PATH = projectPath("data", "reports", "upload_failures.csv");
 
@@ -87,7 +96,7 @@ async function main() {
 
   // Deduplicate by email
   const seen = new Set();
-  const unique = [];
+  let unique = [];
   for (const lead of leads) {
     if (!seen.has(lead.email)) {
       seen.add(lead.email);
@@ -95,6 +104,25 @@ async function main() {
     }
   }
   console.log(`After email dedup: ${unique.length} unique leads`);
+
+  // --- Identity layer: suppress Skool members ---
+  if (identityAvailable) {
+    try {
+      openIdentityDb();
+      const batchEmails = unique.map((l) => l.email);
+      const suppressed = checkOverlaps(batchEmails);
+      if (suppressed.length > 0) {
+        const suppressedSet = new Set(suppressed);
+        const beforeCount = unique.length;
+        unique = unique.filter((l) => !suppressedSet.has(l.email.trim().toLowerCase()));
+        markSuppressed(suppressed);
+        console.log(`Identity layer: suppressed ${suppressed.length} Skool members (${beforeCount} → ${unique.length})`);
+      }
+      closeIdentityDb();
+    } catch (err) {
+      console.log(`Identity layer warning: ${err.message} — continuing without suppression`);
+    }
+  }
 
   // Load checkpoint — skip already-uploaded emails
   ensureDir(projectPath("data", "reports"));
