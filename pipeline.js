@@ -118,32 +118,31 @@ function getActiveSteps(steps, opts) {
   // Apply from filter
   if (opts.from) {
     const fromIdx = result.findIndex((s) => s.name === opts.from);
-    if (fromIdx !== -1) {
-      result = result.slice(fromIdx);
+    if (fromIdx === -1) {
+      console.error(`Unknown step: ${opts.from}`);
+      console.error(`Valid steps: ${result.map((s) => s.name).join(", ")}`);
+      process.exit(1);
     }
+    result = result.slice(fromIdx);
   }
 
   // Apply to filter
   if (opts.to) {
     const toIdx = result.findIndex((s) => s.name === opts.to);
-    if (toIdx !== -1) {
-      result = result.slice(0, toIdx + 1);
+    if (toIdx === -1) {
+      console.error(`Unknown step: ${opts.to}`);
+      console.error(`Valid steps: ${result.map((s) => s.name).join(", ")}`);
+      process.exit(1);
     }
+    result = result.slice(0, toIdx + 1);
   }
 
   // Apply skip filter — if skip name matches a sidecar, mark parent instead
   if (opts.skip.length > 0) {
-    result = result.filter((step) => {
-      if (opts.skip.includes(step.name)) return false;
-      // Check if skip targets a sidecar
-      if (step.sidecar && opts.skip.includes(step.sidecar.name)) {
-        step = Object.assign({}, step); // avoid mutating original
-        step._skipSidecar = true;
-      }
-      return true;
-    });
+    const skipSet = new Set(opts.skip);
+    result = result.filter((s) => !skipSet.has(s.name));
 
-    // Re-apply sidecar skip marks (since filter creates new refs only on removal)
+    // Mark sidecar skips on remaining steps
     result = result.map((step) => {
       if (step.sidecar && opts.skip.includes(step.sidecar.name)) {
         return { ...step, _skipSidecar: true };
@@ -175,13 +174,15 @@ function runCommand(cmd, opts = {}) {
     child.stdout.on("data", (data) => { stdout += data.toString(); });
     child.stderr.on("data", (data) => { stderr += data.toString(); });
 
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
     }, timeout);
 
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code || 0, stdout, stderr });
+      resolve({ code: timedOut ? 124 : (code || 0), stdout, stderr: timedOut ? stderr + "\nProcess timed out" : stderr });
     });
 
     child.on("error", (err) => {
@@ -358,7 +359,8 @@ async function runPipeline(opts) {
   await runCommand("node scripts/build-master.js");
   let masterMap = loadMaster();
 
-  const runState = loadJson(RUN_STATE_PATH) || { failures: [] };
+  const runState = loadJson(RUN_STATE_PATH) || { pendingBatch: null, failures: [] };
+  runState.failures = []; // Clear old failures at start of new run
   const batchCheck = await checkPendingBatch(runState, masterMap);
   if (batchCheck.hasPending) {
     console.log("Pipeline paused — async batch still pending.");
